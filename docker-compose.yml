@@ -1,6 +1,6 @@
 services:
   nas-video-converter:
-    image: ghcr.io/ccawmiku/nas-video-converter:1.0.0
+    image: ghcr.io/ccawmiku/nas-video-converter:1.0.1
     container_name: nas-video-converter
     restart: unless-stopped
     ports:

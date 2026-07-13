@@ -60,7 +60,31 @@ def test_http_scan_settings_and_recovery(tmp_path: Path) -> None:
         assert second_job["state"] == "completed"
         assert client.get("/api/stats", params={"root": str(root)}).json()["total_count"] == 0
         temporary = root / ".orphan.nvc-deadbeef.tmp.mp4"
-        temporary.write_bytes(b"preserved")
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+             "testsrc2=size=96x64:rate=8", "-t", "0.5", "-c:v", "libx264", str(temporary)],
+            check=True,
+        )
+        third = client.post("/api/scans", json={"root": str(root), "require_stable": False}).json()["job_id"]
+        for _ in range(100):
+            third_job = client.get(f"/api/jobs/{third}").json()
+            if third_job["state"] in {"completed", "failed"}:
+                break
+            time.sleep(0.05)
+        assert third_job["state"] == "completed"
+        assert client.get("/api/stats", params={"root": str(root)}).json()["total_count"] == 0
         recovery = client.get("/api/recovery", params={"root": str(root)}).json()
         assert recovery["items"][0]["path"] == str(temporary.resolve())
-        assert temporary.read_bytes() == b"preserved"
+        verify = client.post(
+            "/api/recovery/verifications",
+            json={"root": str(root), "path": str(temporary), "full": False},
+        )
+        assert verify.status_code == 202
+        for _ in range(100):
+            recovery_job = client.get(f"/api/jobs/{verify.json()['job_id']}").json()
+            if recovery_job["state"] in {"completed", "failed"}:
+                break
+            time.sleep(0.05)
+        assert recovery_job["state"] == "completed", recovery_job
+        assert recovery_job["result"]["recovery"] is True
+        assert temporary.exists()

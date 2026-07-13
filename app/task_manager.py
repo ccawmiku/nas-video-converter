@@ -118,6 +118,12 @@ class TaskManager:
         active = self.db.one("SELECT last_scan_id FROM root_state WHERE root=?", (str(root),))
         if not active:
             raise TaskError("必须先完成全量扫描")
+        newer_scan = self.db.one(
+            "SELECT id FROM jobs WHERE root=? AND type='scan' AND state IN ('queued','running','paused','cancelling') AND id<>? LIMIT 1",
+            (str(root), active["last_scan_id"]),
+        )
+        if newer_scan:
+            raise TaskError("新的全量扫描尚未完成，当前不能确认旧计划")
         snapshots: dict[str, Any] = {}
         for row in rows:
             if row["root"] != str(root):
@@ -153,6 +159,13 @@ class TaskManager:
         if not row:
             raise TaskError("文件不存在")
         return self._new_job("verify", row["root"], [file_id], {"full": full})
+
+    def create_recovery_verify(self, root: Path, path: Path, full: bool = False) -> str:
+        root = ensure_safe_root(root)
+        path = ensure_safe_path(root, path)
+        if ".nvc-" not in path.name or not path.name.endswith(".tmp.mp4"):
+            raise TaskError("恢复验证只接受服务遗留的隐藏临时 MP4")
+        return self._new_job("verify", str(root), [], {"full": full, "path": str(path), "recovery": True})
 
     def get(self, job_id: str) -> dict[str, Any] | None:
         row = self.db.one("SELECT * FROM jobs WHERE id=?", (job_id,))
@@ -322,24 +335,34 @@ class TaskManager:
             raise TaskError(f"内存使用达到保护水位 {settings.memory_guard_percent}%")
 
     def _run_verify(self, job: dict[str, Any], control: ProcessControl, started: float) -> dict[str, Any]:
-        row = self.db.one("SELECT * FROM files WHERE id=?", (job["file_ids"][0],))
-        if not row:
+        row = self.db.one("SELECT * FROM files WHERE id=?", (job["file_ids"][0],)) if job["file_ids"] else None
+        if not row and not job["options"].get("recovery"):
             raise TaskError("待检测文件不存在")
-        root = ensure_safe_root(Path(row["root"]))
-        path = ensure_safe_path(root, Path(row["path"]))
+        root = ensure_safe_root(Path(row["root"] if row else job["root"]))
+        path = ensure_safe_path(root, Path(row["path"] if row else job["options"]["path"]))
+        relative_path = row["relative_path"] if row else str(path.relative_to(root))
         before = path.stat()
-        probe = probe_media(path)
-        callback = lambda data: self._progress(job["id"], {"stage": "完整解码", "current_file": row["relative_path"], **data}, started)
-        settings = self.settings_getter()
-        integrity = full_verify(path, probe, control, callback, settings) if job["options"].get("full", True) else sample_verify(path, probe, control)
-        after = path.stat()
-        if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
-            raise TaskError("完整性检测期间文件发生变化")
-        self.db.execute(
-            "UPDATE files SET integrity_status='passed',integrity_json=?,updated_at=? WHERE id=?",
-            (json.dumps(integrity, ensure_ascii=False), utc_now(), row["id"]),
-        )
-        return {"file_id": row["id"], "integrity": integrity}
+        try:
+            probe = probe_media(path)
+            callback = lambda data: self._progress(job["id"], {"stage": "完整解码", "current_file": relative_path, **data}, started)
+            settings = self.settings_getter()
+            integrity = full_verify(path, probe, control, callback, settings) if job["options"].get("full", True) else sample_verify(path, probe, control)
+            after = path.stat()
+            if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+                raise TaskError("完整性检测期间文件发生变化")
+        except Exception as exc:
+            if row:
+                self.db.execute(
+                    "UPDATE files SET integrity_status='failed',integrity_json=?,updated_at=? WHERE id=?",
+                    (json.dumps({"status": "failed", "error": str(exc)}, ensure_ascii=False), utc_now(), row["id"]),
+                )
+            raise
+        if row:
+            self.db.execute(
+                "UPDATE files SET integrity_status='passed',integrity_json=?,updated_at=? WHERE id=?",
+                (json.dumps(integrity, ensure_ascii=False), utc_now(), row["id"]),
+            )
+        return {"file_id": row["id"] if row else None, "path": str(path), "recovery": not bool(row), "integrity": integrity}
 
     def _move_failed_output(self, root: Path, source: Path, temporary: Path) -> str | None:
         if not temporary.exists():

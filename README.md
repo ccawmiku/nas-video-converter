@@ -79,10 +79,10 @@ pytest
 - `POST /api/plans`：确认选中文件及动作
 - `POST /api/conversions`：仅接受已确认计划
 - `POST /api/verifications`：抽样或完整严格检测
+- `POST /api/recovery/verifications`：只读验证中断遗留的临时输出
 - `GET /api/events`：SSE 进度
 - `POST /api/jobs/{id}/pause|resume|cancel`
 - `GET/PUT /api/settings`、`GET /api/automation`
 - `GET /api/jobs`、`GET /api/conversions`、`GET /api/logs`、`GET /api/recovery`
 
 OpenAPI 文档位于 `/docs`（同样只应在可信局域网访问）。
-

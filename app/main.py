@@ -263,6 +263,19 @@ def create_verification(body: VerifyRequest):
     return {"job_id": manager.create_verify(body.file_id, body.full), "state": "queued"}
 
 
+class RecoveryVerifyRequest(BaseModel):
+    root: str
+    path: str
+    full: bool = False
+
+
+@app.post("/api/recovery/verifications", status_code=202)
+def create_recovery_verification(body: RecoveryVerifyRequest):
+    root = allowed_root(body.root, BASE_MEDIA_DIR)
+    path = ensure_safe_path(root, Path(body.path))
+    return {"job_id": manager.create_recovery_verify(root, path, body.full), "state": "queued"}
+
+
 @app.get("/api/jobs")
 def jobs(limit: int = Query(100, ge=1, le=500)):
     return {"items": manager.list(limit)}

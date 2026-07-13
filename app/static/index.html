@@ -48,6 +48,17 @@
       <section class="panel"><div class="section-title"><h2>自动化与资源</h2><button id="saveSettings" class="primary">保存设置</button></div><div id="settings" class="settings-grid"></div></section>
     </div>
 
+    <section class="panel">
+      <div class="section-title"><div><p class="eyebrow">FILE TRANSACTIONS</p><h2>转换记录与路径对应</h2></div><button id="conversionRefresh">刷新</button></div>
+      <div class="table-wrap"><table><thead><tr><th>状态 / 动作</th><th>原文件</th><th>输出文件</th><th>保留原文件</th><th>大小对比</th><th>完成时间</th></tr></thead><tbody id="conversionRows"></tbody></table></div>
+    </section>
+
+    <section class="panel">
+      <div class="section-title"><div><p class="eyebrow">INTERRUPTION RECOVERY</p><h2>中断临时文件</h2></div><button id="recoveryRefresh">刷新</button></div>
+      <p class="muted recovery-note">服务不会自动移动、覆盖或删除这些文件。可先执行只读抽样或严格完整检测，再由人工决定后续操作。</p>
+      <div id="recovery" class="recovery-list"></div>
+    </section>
+
     <section class="panel"><div class="section-title"><h2>错误日志</h2><button id="logRefresh">刷新</button></div><div id="logs" class="logs"></div></section>
   </main>
   <div id="toast"></div>

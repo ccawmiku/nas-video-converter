@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -9,11 +10,12 @@ from typing import Any, Callable
 
 from .config import BASE_MEDIA_DIR, EXCLUDED_DIR_NAMES, VIDEO_EXTENSIONS, Settings
 from .database import Database, utc_now
-from .ffmpeg_tools import MediaToolError, classify_media, probe_media, sample_verify, summarize_probe
+from .ffmpeg_tools import MediaToolError, classify_media, full_verify, probe_media, sample_verify, summarize_probe
 from .safety import SafetyError, ensure_safe_path, ensure_safe_root, is_excluded
 
 
 ScanProgress = Callable[[dict[str, Any]], None]
+FULL_VERIFY_LOCK = threading.Lock()
 
 
 def discover_roots(base: Path = BASE_MEDIA_DIR) -> list[dict[str, str]]:
@@ -67,7 +69,12 @@ def enumerate_videos(root: Path, progress: ScanProgress | None = None) -> list[P
         for name in file_names:
             path = current_path / name
             relative = path.relative_to(root)
-            if is_excluded(relative) or path.suffix.casefold() not in VIDEO_EXTENSIONS or path.is_symlink():
+            if (
+                is_excluded(relative)
+                or (".nvc-" in name and name.endswith(".tmp.mp4"))
+                or path.suffix.casefold() not in VIDEO_EXTENSIONS
+                or path.is_symlink()
+            ):
                 continue
             try:
                 found.append(ensure_safe_path(root, path))
@@ -128,7 +135,13 @@ def inspect_file(db: Database, root: Path, path: Path, settings: Settings, requi
             integrity = json.loads(cached["integrity_json"])
             integrity["cached"] = True
         else:
-            integrity = sample_verify(path, probe)
+            try:
+                integrity = sample_verify(path, probe)
+            except MediaToolError as sample_error:
+                # Abnormal samples are escalated one-at-a-time to a strict full decode.
+                with FULL_VERIFY_LOCK:
+                    integrity = full_verify(path, probe)
+                integrity["escalated_from_sample_error"] = str(sample_error)
             integrity_status = "passed"
         stat_after = path.stat()
         if (stat_after.st_size, stat_after.st_mtime_ns) != (stat_before.st_size, stat_before.st_mtime_ns):
