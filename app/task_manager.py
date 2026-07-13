@@ -287,7 +287,7 @@ class TaskManager:
                 self._acquire_slot(job["type"])
                 slot_acquired = True
                 if job["type"] == "scan":
-                    result = self._run_scan(job, started)
+                    result = self._run_scan(job, control, started)
                 elif job["type"] == "convert":
                     result = self._run_conversion(job, control, started)
                 elif job["type"] == "verify":
@@ -308,13 +308,14 @@ class TaskManager:
                 self.controls.pop(job_id, None)
                 self.pending.task_done()
 
-    def _run_scan(self, job: dict[str, Any], started: float) -> dict[str, Any]:
+    def _run_scan(self, job: dict[str, Any], control: ProcessControl, started: float) -> dict[str, Any]:
         root = ensure_safe_root(Path(job["root"]))
         settings = self.settings_getter()
         result = scan_root(
             self.db, root, job["id"], settings,
             progress=lambda data: self._progress(job["id"], data, started),
             require_stable=bool(job["options"].get("require_stable")),
+            control=control,
         )
         if job["options"].get("trigger") != "manual" and (settings.auto_remux or settings.auto_transcode):
             rows = self.db.query("SELECT id,category FROM files WHERE root=? AND scan_id=?", (str(root), job["id"]))

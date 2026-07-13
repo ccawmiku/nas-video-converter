@@ -24,42 +24,87 @@ ProgressCallback = Callable[[dict[str, Any]], None]
 class ProcessControl:
     cancelled: threading.Event = field(default_factory=threading.Event)
     paused: threading.Event = field(default_factory=threading.Event)
-    process: subprocess.Popen[str] | None = None
-    _is_stopped: bool = False
+    _processes: set[subprocess.Popen[str]] = field(default_factory=set, init=False, repr=False)
+    _stopped_pids: set[int] = field(default_factory=set, init=False, repr=False)
+    _lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
+
+    def attach(self, process: subprocess.Popen[str]) -> None:
+        with self._lock:
+            self._processes.add(process)
+            if self.cancelled.is_set() and process.poll() is None:
+                try:
+                    process.terminate()
+                except ProcessLookupError:
+                    pass
+            elif self.paused.is_set() and process.poll() is None and os.name == "posix":
+                try:
+                    os.kill(process.pid, signal.SIGSTOP)
+                    self._stopped_pids.add(process.pid)
+                except ProcessLookupError:
+                    pass
+
+    def detach(self, process: subprocess.Popen[str]) -> None:
+        with self._lock:
+            self._processes.discard(process)
+            self._stopped_pids.discard(process.pid)
 
     def cancel(self) -> None:
         self.cancelled.set()
-        process = self.process
-        if process and process.poll() is None:
-            process.terminate()
+        with self._lock:
+            for process in tuple(self._processes):
+                if process.poll() is None:
+                    try:
+                        process.terminate()
+                    except ProcessLookupError:
+                        pass
 
     def pause(self) -> None:
         self.paused.set()
-        process = self.process
-        if process and process.poll() is None and os.name == "posix":
-            os.kill(process.pid, signal.SIGSTOP)
-            self._is_stopped = True
+        if os.name != "posix":
+            return
+        with self._lock:
+            for process in tuple(self._processes):
+                if process.poll() is None:
+                    try:
+                        os.kill(process.pid, signal.SIGSTOP)
+                        self._stopped_pids.add(process.pid)
+                    except ProcessLookupError:
+                        pass
 
     def resume(self) -> None:
         self.paused.clear()
-        process = self.process
-        if process and process.poll() is None and os.name == "posix" and self._is_stopped:
-            os.kill(process.pid, signal.SIGCONT)
-            self._is_stopped = False
+        if os.name != "posix":
+            return
+        with self._lock:
+            for process in tuple(self._processes):
+                if process.pid in self._stopped_pids and process.poll() is None:
+                    try:
+                        os.kill(process.pid, signal.SIGCONT)
+                    except ProcessLookupError:
+                        pass
+            self._stopped_pids.clear()
 
 
-def probe_media(path: Path) -> dict[str, Any]:
+def probe_media(path: Path, control: ProcessControl | None = None) -> dict[str, Any]:
     command = [
         FFPROBE_BIN, "-v", "error", "-show_error", "-show_format", "-show_streams",
         "-show_chapters", "-print_format", "json", str(path),
     ]
-    completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    control = control or ProcessControl()
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
+    control.attach(process)
     try:
-        data = json.loads(completed.stdout or "{}")
+        stdout, stderr = process.communicate()
+    finally:
+        control.detach(process)
+    if control.cancelled.is_set():
+        raise MediaToolError("任务已取消")
+    try:
+        data = json.loads(stdout or "{}")
     except json.JSONDecodeError as exc:
         raise MediaToolError(f"FFprobe 返回无效 JSON：{exc}") from exc
-    if completed.returncode != 0 or data.get("error"):
-        detail = completed.stderr.strip() or str(data.get("error") or "未知错误")
+    if process.returncode != 0 or data.get("error"):
+        detail = stderr.strip() or str(data.get("error") or "未知错误")
         raise MediaToolError(f"FFprobe 失败：{detail}")
     if not data.get("streams"):
         raise MediaToolError("FFprobe 未发现媒体轨道")
@@ -215,7 +260,7 @@ def run_ffmpeg(
         bufsize=1,
         preexec_fn=_preexec(nice),
     )
-    control.process = process
+    control.attach(process)
     throttle_done = threading.Event()
     def throttle() -> None:
         if os.name != "posix" or not cpu_percent or cpu_percent >= 100:
@@ -241,37 +286,51 @@ def run_ffmpeg(
     throttle_thread.start()
     messages: list[str] = []
     block: dict[str, Any] = {}
-    assert process.stdout is not None
-    for raw_line in process.stdout:
-        if control.cancelled.is_set() and process.poll() is None:
+    try:
+        assert process.stdout is not None
+        for raw_line in process.stdout:
+            if control.cancelled.is_set() and process.poll() is None:
+                process.terminate()
+            line = raw_line.rstrip()
+            if "=" in line:
+                key, value = line.split("=", 1)
+                if key in {"frame", "fps", "bitrate", "total_size", "out_time_us", "out_time_ms", "out_time", "speed", "progress"}:
+                    block[key] = value
+                    if key == "progress":
+                        try:
+                            # FFmpeg versions disagree whether out_time_ms is microseconds; out_time_us is explicit.
+                            micros = int(block.get("out_time_us") or block.get("out_time_ms") or 0)
+                        except (TypeError, ValueError):
+                            micros = 0
+                        current = max(0.0, micros / 1_000_000)
+                        block["current_seconds"] = current
+                        block["duration_seconds"] = duration
+                        block["percent"] = min(100.0, current / duration * 100) if duration else 0.0
+                        if progress:
+                            progress(dict(block))
+                        block = {}
+                    continue
+            if line:
+                messages.append(line)
+                if len(messages) > 200:
+                    messages = messages[-200:]
+        return_code = process.wait()
+    finally:
+        throttle_done.set()
+        if process.poll() is None:
+            if os.name == "posix":
+                try:
+                    os.kill(process.pid, signal.SIGCONT)
+                except ProcessLookupError:
+                    pass
             process.terminate()
-        line = raw_line.rstrip()
-        if "=" in line:
-            key, value = line.split("=", 1)
-            if key in {"frame", "fps", "bitrate", "total_size", "out_time_us", "out_time_ms", "out_time", "speed", "progress"}:
-                block[key] = value
-                if key == "progress":
-                    try:
-                        # FFmpeg versions disagree whether out_time_ms is microseconds; out_time_us is explicit.
-                        micros = int(block.get("out_time_us") or block.get("out_time_ms") or 0)
-                    except (TypeError, ValueError):
-                        micros = 0
-                    current = max(0.0, micros / 1_000_000)
-                    block["current_seconds"] = current
-                    block["duration_seconds"] = duration
-                    block["percent"] = min(100.0, current / duration * 100) if duration else 0.0
-                    if progress:
-                        progress(dict(block))
-                    block = {}
-                continue
-        if line:
-            messages.append(line)
-            if len(messages) > 200:
-                messages = messages[-200:]
-    return_code = process.wait()
-    throttle_done.set()
-    throttle_thread.join(timeout=1)
-    control.process = None
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        throttle_thread.join(timeout=1)
+        control.detach(process)
     if control.cancelled.is_set():
         raise MediaToolError("任务已取消")
     if return_code != 0:

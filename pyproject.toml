@@ -1,6 +1,6 @@
 [project]
 name = "nas-video-converter"
-version = "1.0.1"
+version = "1.0.2"
 description = "Safe, plan-first NAS video inspection and conversion service"
 requires-python = ">=3.11"
 dependencies = [
@@ -19,6 +19,7 @@ test = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.coverage.run]
 source = ["app"]

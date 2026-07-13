@@ -10,12 +10,25 @@ from typing import Any, Callable
 
 from .config import BASE_MEDIA_DIR, EXCLUDED_DIR_NAMES, VIDEO_EXTENSIONS, Settings
 from .database import Database, utc_now
-from .ffmpeg_tools import MediaToolError, classify_media, full_verify, probe_media, sample_verify, summarize_probe
+from .ffmpeg_tools import MediaToolError, ProcessControl, classify_media, full_verify, probe_media, sample_verify, summarize_probe
 from .safety import SafetyError, ensure_safe_path, ensure_safe_root, is_excluded
 
 
 ScanProgress = Callable[[dict[str, Any]], None]
 FULL_VERIFY_LOCK = threading.Lock()
+
+
+class ScanCancelled(RuntimeError):
+    pass
+
+
+def _control_checkpoint(control: ProcessControl | None) -> None:
+    if not control:
+        return
+    while control.paused.is_set() and not control.cancelled.is_set():
+        time.sleep(0.1)
+    if control.cancelled.is_set():
+        raise ScanCancelled("扫描任务已取消")
 
 
 def discover_roots(base: Path = BASE_MEDIA_DIR) -> list[dict[str, str]]:
@@ -44,12 +57,17 @@ def allowed_root(requested: str, base: Path = BASE_MEDIA_DIR) -> Path:
     return ensure_safe_root(choices[resolved])
 
 
-def enumerate_videos(root: Path, progress: ScanProgress | None = None) -> list[Path]:
+def enumerate_videos(
+    root: Path,
+    progress: ScanProgress | None = None,
+    control: ProcessControl | None = None,
+) -> list[Path]:
     root = ensure_safe_root(root)
     found: list[Path] = []
     directories = 0
     discovered_directories = 1
     for current, dir_names, file_names in os.walk(root, topdown=True, followlinks=False):
+        _control_checkpoint(control)
         current_path = Path(current)
         relative_current = current_path.relative_to(root)
         safe_dirs: list[str] = []
@@ -109,8 +127,16 @@ def _stability(db: Database, path: Path, stat: os.stat_result, stable_seconds: i
     return not require_stable
 
 
-def inspect_file(db: Database, root: Path, path: Path, settings: Settings, require_stable: bool) -> dict[str, Any]:
+def inspect_file(
+    db: Database,
+    root: Path,
+    path: Path,
+    settings: Settings,
+    require_stable: bool,
+    control: ProcessControl | None = None,
+) -> dict[str, Any]:
     started = time.monotonic()
+    _control_checkpoint(control)
     path = ensure_safe_path(root, path)
     stat_before = path.stat()
     stable = _stability(db, path, stat_before, settings.stable_seconds, require_stable)
@@ -124,7 +150,8 @@ def inspect_file(db: Database, root: Path, path: Path, settings: Settings, requi
             "elapsed_seconds": time.monotonic() - started,
         }
     try:
-        probe = probe_media(path)
+        probe = probe_media(path, control)
+        _control_checkpoint(control)
         category, reason = classify_media(path, probe)
         cached = db.one(
             "SELECT integrity_status,integrity_json FROM files WHERE real_path=? AND size=? AND mtime_ns=?",
@@ -136,18 +163,23 @@ def inspect_file(db: Database, root: Path, path: Path, settings: Settings, requi
             integrity["cached"] = True
         else:
             try:
-                integrity = sample_verify(path, probe)
+                integrity = sample_verify(path, probe, control)
             except MediaToolError as sample_error:
+                _control_checkpoint(control)
                 # Abnormal samples are escalated one-at-a-time to a strict full decode.
                 with FULL_VERIFY_LOCK:
-                    integrity = full_verify(path, probe)
+                    _control_checkpoint(control)
+                    integrity = full_verify(path, probe, control)
                 integrity["escalated_from_sample_error"] = str(sample_error)
             integrity_status = "passed"
+        _control_checkpoint(control)
         stat_after = path.stat()
         if (stat_after.st_size, stat_after.st_mtime_ns) != (stat_before.st_size, stat_before.st_mtime_ns):
             category, reason = "skipped", "检测期间文件发生变化，视为仍在写入"
             integrity_status = "changed"
     except (MediaToolError, OSError) as exc:
+        if control and control.cancelled.is_set():
+            raise ScanCancelled("扫描任务已取消") from exc
         probe = {}
         category, reason = "skipped", f"文件损坏或检测失败：{exc}"
         integrity_status = "failed"
@@ -168,18 +200,22 @@ def scan_root(
     settings: Settings,
     progress: ScanProgress | None = None,
     require_stable: bool = False,
+    control: ProcessControl | None = None,
 ) -> dict[str, Any]:
     root = ensure_safe_root(root)
     started = time.monotonic()
-    paths = enumerate_videos(root, progress)
+    _control_checkpoint(control)
+    paths = enumerate_videos(root, progress, control)
+    _control_checkpoint(control)
     total_bytes = sum(path.stat().st_size for path in paths)
     if progress:
         progress({"stage": "文件统计", "completed": len(paths), "total": len(paths), "total_bytes": total_bytes, "percent": 100})
     results: list[dict[str, Any]] = []
     processed_bytes = 0
     with ThreadPoolExecutor(max_workers=settings.scan_concurrency) as pool:
-        futures = {pool.submit(inspect_file, db, root, path, settings, require_stable): path for path in paths}
+        futures = {pool.submit(inspect_file, db, root, path, settings, require_stable, control): path for path in paths}
         for index, future in enumerate(as_completed(futures), 1):
+            _control_checkpoint(control)
             item = future.result()
             results.append(item)
             processed_bytes += item["size"]
@@ -189,6 +225,7 @@ def scan_root(
                     "completed": index, "total": len(paths), "processed_bytes": processed_bytes,
                     "total_bytes": total_bytes, "percent": index / len(paths) * 100 if paths else 100,
                 })
+    _control_checkpoint(control)
     now = utc_now()
     for item in results:
         db.execute(
