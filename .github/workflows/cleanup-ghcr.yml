@@ -1,0 +1,40 @@
+name: Remove forbidden GHCR latest tag
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete latest-only package versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          PACKAGE: nas-video-converter
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="/users/${OWNER}/packages/container/${PACKAGE}/versions"
+          versions="$(gh api --paginate "$endpoint")"
+
+          if jq -e '.[] | select(.metadata.container.tags | index("latest")) | select((.metadata.container.tags | length) != 1 or .metadata.container.tags[0] != "latest")' <<<"$versions" >/dev/null; then
+            echo "Refusing to delete a package version where latest is combined with another tag." >&2
+            exit 1
+          fi
+
+          mapfile -t ids < <(jq -r '.[] | select(.metadata.container.tags == ["latest"]) | .id' <<<"$versions")
+          for id in "${ids[@]}"; do
+            gh api --method DELETE "${endpoint}/${id}"
+          done
+
+          remaining="$(gh api --paginate "$endpoint")"
+          if jq -e '.[] | select(.metadata.container.tags | index("latest"))' <<<"$remaining" >/dev/null; then
+            echo "The latest tag still exists after cleanup." >&2
+            exit 1
+          fi
+          echo "Confirmed: no GHCR package version carries the latest tag."
