@@ -155,7 +155,21 @@ def get_settings():
 
 @app.get("/api/hardware")
 def hardware_status():
-    return {"intel_qsv": intel_qsv_status()}
+    settings = load_settings()
+    qsv = intel_qsv_status()
+    if settings.hardware_acceleration == "software":
+        effective_backend = "software"
+    elif qsv["available"]:
+        effective_backend = "intel_qsv"
+    elif settings.hardware_acceleration == "intel_qsv":
+        effective_backend = "unavailable"
+    else:
+        effective_backend = "software"
+    return {
+        "selected_mode": settings.hardware_acceleration,
+        "effective_backend": effective_backend,
+        "intel_qsv": qsv,
+    }
 
 
 @app.put("/api/settings")
@@ -319,6 +333,7 @@ async def events(request: Request, after: int = 0):
     cursor = max(after, int(header) if header and header.isdigit() else 0)
     async def generate():
         nonlocal cursor
+        last_keepalive = time.monotonic()
         while True:
             if await request.is_disconnected():
                 return
@@ -328,9 +343,10 @@ async def events(request: Request, after: int = 0):
                     cursor = row["id"]
                     payload = {"job_id": row["job_id"], **json.loads(row["data_json"])}
                     yield f"id: {cursor}\nevent: {row['event']}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
-            else:
+            elif time.monotonic() - last_keepalive >= 15:
                 yield ": keepalive\n\n"
-            await asyncio.sleep(1)
+                last_keepalive = time.monotonic()
+            await asyncio.sleep(0.2)
     return StreamingResponse(generate(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
 
 

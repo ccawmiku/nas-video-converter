@@ -54,11 +54,11 @@ docker compose up -d
 
 扫描执行 FFprobe 结构分析以及开头、中间、结尾抽样解码。异常文件可在网页发起完整严格解码。缓存键包含真实路径、大小和纳秒修改时间。任务通过 SQLite 持久化；SSE 支持浏览器断线重连。
 
-FFmpeg 操作使用 `-progress pipe:1` 的真实输出展示阶段、文件/整体百分比、数量、体积、已用时间、ETA、speed、输出时间和总时长。暂停/继续在 Linux 上使用进程信号；取消会终止 FFmpeg 并保存已产生的临时输出。
+FFmpeg 操作使用 `-progress pipe:1` 的真实输出展示阶段、文件/整体百分比、数量、体积、已用时间、ETA、speed、输出时间和总时长；后端每 0.2 秒检查并通过 SSE 转发新进度。网页顶部和实时任务区域会显示当前实际使用的编码后端（Intel QSV、libx264 或流复制）。暂停/继续在 Linux 上使用进程信号；取消会终止 FFmpeg 并保存已产生的临时输出。
 
 ## 群晖部署
 
-参见 [docs/synology.md](docs/synology.md)。容器只发布 `linux/amd64`，不支持 ARM 群晖。默认进程身份为 `1026:100`，可通过 `PUID`/`PGID` 覆盖。数据库和设置位于 `/config/nas-video-converter.db`。主 Compose 已为 N95 映射 `/dev/dri/renderD128`；网页默认自动检测 QSV，不可用时回退到软件编码。
+参见 [docs/synology.md](docs/synology.md)。容器只发布 `linux/amd64`，不支持 ARM 群晖。默认进程身份为 `1026:100`，可通过 `PUID`/`PGID` 覆盖。数据库和设置位于 `/config/nas-video-converter.db`。主 Compose 已为 N95 映射 `/dev/dri/renderD128`；启动脚本会把容器用户加入该设备的宿主机数值 GID，网页默认自动检测 QSV，不可用时回退到软件编码。
 
 ## 本地开发与测试
 

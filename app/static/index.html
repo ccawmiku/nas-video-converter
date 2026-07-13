@@ -16,6 +16,7 @@
       <label>映射目录<select id="rootSelect"></select></label>
       <button id="scanBtn" class="primary">完整扫描并生成计划</button>
       <button id="refreshBtn">刷新</button>
+      <div id="hardwareBadge" class="hardware-badge checking">编码后端检测中…</div>
       <div id="automationBadge" class="muted">自动任务读取中…</div>
     </section>
 
@@ -32,6 +33,7 @@
           <span>已用 <b id="elapsed">—</b></span><span>预计剩余 <b id="eta">—</b></span>
           <span>单文件 <b id="filePercent">—</b></span><span>速度 <b id="speed">—</b></span>
           <span>输出时间 / 总时长 <b id="outputTime">—</b></span><span>处理体积 <b id="processedBytes">—</b></span>
+          <span>实际处理后端 <b id="backend">—</b></span>
         </div>
         <div class="actions"><button id="pauseBtn">暂停</button><button id="resumeBtn">继续</button><button id="cancelBtn" class="danger">取消（保留输出）</button></div>
       </div>
@@ -45,7 +47,13 @@
 
     <div class="split">
       <section class="panel"><div class="section-title"><h2>任务历史</h2><button id="historyRefresh">刷新</button></div><div id="history" class="timeline"></div></section>
-      <section class="panel"><div class="section-title"><h2>自动化与资源</h2><button id="saveSettings" class="primary">保存设置</button></div><div id="settings" class="settings-grid"></div></section>
+      <section class="panel settings-panel">
+        <div class="section-title settings-title">
+          <div><p class="eyebrow">AUTOMATION &amp; RESOURCES</p><h2>自动化与资源</h2><p class="section-description">按用途分组配置；修改后统一保存。</p></div>
+          <button id="saveSettings" class="primary">保存设置</button>
+        </div>
+        <div id="settings" class="settings-groups"></div>
+      </section>
     </div>
 
     <section class="panel">

@@ -48,3 +48,9 @@ def test_conversion_arguments_select_requested_encoder() -> None:
     assert hardware[hardware.index("-global_quality") + 1] == "18"
     assert "nv12" in hardware
     assert "-crf" not in hardware
+
+
+def test_entrypoint_preserves_qsv_supplementary_group() -> None:
+    entrypoint = (Path(__file__).parents[1] / "scripts" / "docker-entrypoint.sh").read_text(encoding="utf-8")
+    assert 'exec gosu "$NVC_USER" "$@"' in entrypoint
+    assert 'exec gosu "$NVC_USER:$PGID" "$@"' not in entrypoint

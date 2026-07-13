@@ -402,6 +402,7 @@ class TaskManager:
             source = ensure_safe_path(root, Path(row["path"]))
             snapshot = snapshots[str(row["id"])]
             action = snapshot["action"]
+            current_backend = "stream_copy" if action == "remux" else selected_backend
             stat_before = source.stat()
             if (stat_before.st_size, stat_before.st_mtime_ns) != (snapshot["size"], snapshot["mtime_ns"]):
                 raise TaskError(f"源文件在计划确认后发生变化：{row['relative_path']}")
@@ -413,7 +414,7 @@ class TaskManager:
             conversion_id = self.db.execute(
                 "INSERT INTO conversions(job_id,file_id,source_path,source_probe_json,source_size,backend,status,created_at) VALUES(?,?,?,?,?,?,?,?)",
                 (job["id"], row["id"], str(source), json.dumps(summarize_probe(source_probe), ensure_ascii=False),
-                 stat_before.st_size, "stream_copy" if action == "remux" else selected_backend, "running", utc_now()),
+                 stat_before.st_size, current_backend, "running", utc_now()),
             )
             try:
                 duration = duration_seconds(source_probe)
@@ -428,7 +429,7 @@ class TaskManager:
                         "percent": overall, "completed": index, "total": len(rows),
                         "processed_bytes": processed_bytes, "total_bytes": total_bytes,
                         "speed": data.get("speed"), "out_time": data.get("out_time"),
-                        "duration_seconds": duration,
+                        "duration_seconds": duration, "backend": current_backend,
                     }, started)
                 run_ffmpeg(
                     conversion_args(source, temporary, action, settings, profile, selected_backend),
@@ -438,6 +439,7 @@ class TaskManager:
                 self._progress(job["id"], {
                     "stage": "输出验证", "current_file": row["relative_path"], "file_percent": 0,
                     "percent": (index + 0.9) / len(rows) * 100, "completed": index, "total": len(rows),
+                    "backend": current_backend,
                 }, started)
                 output_probe = probe_media(temporary)
                 sample_verify(temporary, output_probe, control)
@@ -451,10 +453,10 @@ class TaskManager:
                 relative = source.relative_to(root)
                 preserved_root = root / "转换前原文件"
                 backup = unique_preserved_path(root, preserved_root, relative)
-                self._progress(job["id"], {"stage": "移动原文件", "current_file": row["relative_path"], "percent": (index + 0.96) / len(rows) * 100}, started)
+                self._progress(job["id"], {"stage": "移动原文件", "current_file": row["relative_path"], "percent": (index + 0.96) / len(rows) * 100, "backend": current_backend}, started)
                 safe_rename(root, source, backup)
                 try:
-                    self._progress(job["id"], {"stage": "临时文件正式改名", "current_file": row["relative_path"], "percent": (index + 0.99) / len(rows) * 100}, started)
+                    self._progress(job["id"], {"stage": "临时文件正式改名", "current_file": row["relative_path"], "percent": (index + 0.99) / len(rows) * 100, "backend": current_backend}, started)
                     safe_rename(root, temporary, target)
                 except Exception:
                     # Compensating same-filesystem rename restores the source path; no copy or deletion is used.
@@ -475,13 +477,14 @@ class TaskManager:
                     "file_id": row["id"], "source_path": str(source), "output_path": str(target),
                     "backup_path": str(backup), "source_size": stat_before.st_size, "output_size": output_size,
                     "size_difference": output_size - stat_before.st_size, "warning": warning, "action": action,
-                    "backend": "stream_copy" if action == "remux" else selected_backend,
+                    "backend": current_backend,
                 })
                 processed_bytes += stat_before.st_size
                 self._progress(job["id"], {
                     "stage": "整体批次", "current_file": row["relative_path"], "file_percent": 100,
                     "percent": (index + 1) / len(rows) * 100, "completed": index + 1, "total": len(rows),
                     "processed_bytes": processed_bytes, "total_bytes": total_bytes,
+                    "backend": current_backend,
                 }, started)
             except Exception as exc:
                 failed_path = None

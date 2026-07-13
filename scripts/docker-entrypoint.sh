@@ -41,8 +41,11 @@ fi
 
 mkdir -p /config
 chown -R "$PUID:$PGID" /config
-if ! gosu "$NVC_USER:$PGID" test -w /config; then
+if ! gosu "$NVC_USER" test -w /config; then
   echo "/config 对 PUID=$PUID PGID=$PGID 不可写；请检查群晖挂载路径、rw 模式和 ACL" >&2
   exit 73
 fi
-exec gosu "$NVC_USER:$PGID" "$@"
+if [ -e "$QSV_DEVICE" ] && { ! gosu "$NVC_USER" test -r "$QSV_DEVICE" || ! gosu "$NVC_USER" test -w "$QSV_DEVICE"; }; then
+  echo "警告：PUID=$PUID 对 $QSV_DEVICE 没有读写权限，自动模式将回退到 libx264" >&2
+fi
+exec gosu "$NVC_USER" "$@"
