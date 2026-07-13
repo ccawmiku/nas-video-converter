@@ -15,5 +15,7 @@ services:
       - /volume1/video:/media/视频库:rw
       - /volume1/movie:/media/电影:rw
       # - /volume2/other:/media/其他目录:rw
+    devices:
+      - /dev/dri/renderD128:/dev/dri/renderD128
     security_opt:
       - no-new-privileges:true
