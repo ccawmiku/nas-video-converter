@@ -1,0 +1,25 @@
+[project]
+name = "nas-video-converter"
+version = "1.0.0"
+description = "Safe, plan-first NAS video inspection and conversion service"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi==0.115.12",
+  "uvicorn[standard]==0.34.2",
+  "psutil==7.0.0",
+]
+
+[project.optional-dependencies]
+test = [
+  "httpx==0.28.1",
+  "pytest==8.3.5",
+  "pytest-cov==6.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.coverage.run]
+source = ["app"]
+

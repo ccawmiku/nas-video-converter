@@ -1,0 +1,331 @@
+from __future__ import annotations
+
+import json
+import os
+import signal
+import subprocess
+import threading
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable
+
+from .config import FFMPEG_BIN, FFPROBE_BIN, PROFILE_CRF, Settings
+
+
+class MediaToolError(RuntimeError):
+    pass
+
+
+ProgressCallback = Callable[[dict[str, Any]], None]
+
+
+@dataclass
+class ProcessControl:
+    cancelled: threading.Event = field(default_factory=threading.Event)
+    paused: threading.Event = field(default_factory=threading.Event)
+    process: subprocess.Popen[str] | None = None
+    _is_stopped: bool = False
+
+    def cancel(self) -> None:
+        self.cancelled.set()
+        process = self.process
+        if process and process.poll() is None:
+            process.terminate()
+
+    def pause(self) -> None:
+        self.paused.set()
+        process = self.process
+        if process and process.poll() is None and os.name == "posix":
+            os.kill(process.pid, signal.SIGSTOP)
+            self._is_stopped = True
+
+    def resume(self) -> None:
+        self.paused.clear()
+        process = self.process
+        if process and process.poll() is None and os.name == "posix" and self._is_stopped:
+            os.kill(process.pid, signal.SIGCONT)
+            self._is_stopped = False
+
+
+def probe_media(path: Path) -> dict[str, Any]:
+    command = [
+        FFPROBE_BIN, "-v", "error", "-show_error", "-show_format", "-show_streams",
+        "-show_chapters", "-print_format", "json", str(path),
+    ]
+    completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    try:
+        data = json.loads(completed.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        raise MediaToolError(f"FFprobe 返回无效 JSON：{exc}") from exc
+    if completed.returncode != 0 or data.get("error"):
+        detail = completed.stderr.strip() or str(data.get("error") or "未知错误")
+        raise MediaToolError(f"FFprobe 失败：{detail}")
+    if not data.get("streams"):
+        raise MediaToolError("FFprobe 未发现媒体轨道")
+    return data
+
+
+def duration_seconds(probe: dict[str, Any]) -> float:
+    values: list[float] = []
+    raw = probe.get("format", {}).get("duration")
+    try:
+        values.append(float(raw))
+    except (TypeError, ValueError):
+        pass
+    for stream in probe.get("streams", []):
+        try:
+            values.append(float(stream.get("duration")))
+        except (TypeError, ValueError):
+            pass
+    return max(values, default=0.0)
+
+
+def _bit_depth(stream: dict[str, Any]) -> int:
+    for key in ("bits_per_raw_sample", "bits_per_sample"):
+        try:
+            value = int(stream.get(key) or 0)
+            if value:
+                return value
+        except (TypeError, ValueError):
+            pass
+    pix_fmt = str(stream.get("pix_fmt") or "").lower()
+    for depth in (16, 14, 12, 10, 9):
+        if str(depth) in pix_fmt:
+            return depth
+    return 8
+
+
+def _hdr_reason(probe: dict[str, Any]) -> str | None:
+    for stream in probe.get("streams", []):
+        if stream.get("codec_type") != "video" or stream.get("disposition", {}).get("attached_pic"):
+            continue
+        depth = _bit_depth(stream)
+        if depth >= 10:
+            return f"{depth}-bit 视频按安全规则跳过"
+        profile = str(stream.get("profile") or "").lower()
+        tags = " ".join(str(v) for v in stream.get("tags", {}).values()).lower()
+        side_data = json.dumps(stream.get("side_data_list", []), ensure_ascii=False).lower()
+        transfer = str(stream.get("color_transfer") or "").lower()
+        if "dolby vision" in profile or "dovi" in tags or "dovi" in side_data:
+            return "检测到杜比视界，按安全规则跳过"
+        if transfer in {"smpte2084", "arib-std-b67"} or any(
+            marker in side_data for marker in ("mastering display metadata", "content light level metadata", "smpte2084")
+        ):
+            return "检测到 HDR，按安全规则跳过"
+    return None
+
+
+def summarize_probe(probe: dict[str, Any]) -> dict[str, Any]:
+    videos = [s for s in probe.get("streams", []) if s.get("codec_type") == "video"]
+    audios = [s for s in probe.get("streams", []) if s.get("codec_type") == "audio"]
+    subtitles = [s for s in probe.get("streams", []) if s.get("codec_type") == "subtitle"]
+    primary = next((s for s in videos if not s.get("disposition", {}).get("attached_pic")), videos[0] if videos else {})
+    return {
+        "container": probe.get("format", {}).get("format_name", ""),
+        "format_long_name": probe.get("format", {}).get("format_long_name", ""),
+        "duration": duration_seconds(probe),
+        "video_codec": primary.get("codec_name", ""),
+        "video_profile": primary.get("profile", ""),
+        "pix_fmt": primary.get("pix_fmt", ""),
+        "bit_depth": _bit_depth(primary) if primary else None,
+        "width": primary.get("width"),
+        "height": primary.get("height"),
+        "frame_rate": primary.get("avg_frame_rate") or primary.get("r_frame_rate"),
+        "audio_tracks": [s.get("codec_name", "") for s in audios],
+        "subtitle_tracks": [s.get("codec_name", "") for s in subtitles],
+        "stream_count": len(probe.get("streams", [])),
+        "chapter_count": len(probe.get("chapters", [])),
+        "streams": probe.get("streams", []),
+    }
+
+
+MP4_VIDEO_CODECS = {"h264", "hevc", "mpeg4", "av1", "vp9", "mjpeg"}
+MP4_AUDIO_CODECS = {"aac", "mp3", "ac3", "eac3", "alac", "flac"}
+MP4_SUBTITLE_CODECS = {"mov_text"}
+
+
+def incompatible_streams(probe: dict[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    for stream in probe.get("streams", []):
+        kind = stream.get("codec_type", "unknown")
+        codec = stream.get("codec_name", "unknown")
+        index = stream.get("index", "?")
+        if kind == "video" and stream.get("disposition", {}).get("attached_pic"):
+            reasons.append(f"轨道 {index}：封面附件不能保证原样写入 MP4")
+        elif kind == "video" and codec not in MP4_VIDEO_CODECS:
+            continue
+        elif kind == "audio" and codec not in MP4_AUDIO_CODECS:
+            reasons.append(f"轨道 {index}：音频 {codec} 不能按规则原样写入 MP4")
+        elif kind == "subtitle" and codec not in MP4_SUBTITLE_CODECS:
+            reasons.append(f"轨道 {index}：字幕 {codec} 不能按规则原样写入 MP4")
+        elif kind in {"attachment", "data", "unknown"}:
+            reasons.append(f"轨道 {index}：{kind} / {codec} 不能按规则原样写入 MP4")
+    return reasons
+
+
+def classify_media(path: Path, probe: dict[str, Any]) -> tuple[str, str]:
+    hdr = _hdr_reason(probe)
+    if hdr:
+        return "skipped", hdr
+    videos = [
+        s for s in probe.get("streams", [])
+        if s.get("codec_type") == "video" and not s.get("disposition", {}).get("attached_pic")
+    ]
+    if not videos:
+        return "unsupported", "没有可处理的视频轨道"
+    format_names = set(str(probe.get("format", {}).get("format_name", "")).split(","))
+    if path.suffix.lower() == ".mp4" or "mp4" in format_names:
+        return "no_conversion", "已是 MP4，仅执行完整性检测"
+    incompatible = incompatible_streams(probe)
+    if incompatible:
+        return "unsupported", "；".join(incompatible)
+    if all(s.get("codec_name") in MP4_VIDEO_CODECS for s in videos):
+        return "remux", "全部轨道可原样写入 MP4（-map 0 -c copy）"
+    return "transcode", "普通 SDR 8-bit 视频需转为 H.264，其他轨道保持原样"
+
+
+def _preexec(nice: int) -> Callable[[], None] | None:
+    if os.name != "posix":
+        return None
+    def set_nice() -> None:
+        if nice:
+            os.nice(nice)
+    return set_nice
+
+
+def run_ffmpeg(
+    args: list[str],
+    *,
+    control: ProcessControl | None = None,
+    progress: ProgressCallback | None = None,
+    duration: float = 0,
+    nice: int = 0,
+    cpu_percent: int | None = None,
+) -> list[str]:
+    control = control or ProcessControl()
+    command = [FFMPEG_BIN, "-hide_banner", "-nostdin", "-nostats", "-progress", "pipe:1", *args]
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+        preexec_fn=_preexec(nice),
+    )
+    control.process = process
+    throttle_done = threading.Event()
+    def throttle() -> None:
+        if os.name != "posix" or not cpu_percent or cpu_percent >= 100:
+            return
+        cycle = 0.25
+        running = cycle * cpu_percent / 100
+        stopped = cycle - running
+        while not throttle_done.is_set() and process.poll() is None:
+            if control.paused.is_set():
+                throttle_done.wait(0.1)
+                continue
+            if throttle_done.wait(running) or process.poll() is not None or control.paused.is_set():
+                continue
+            try:
+                os.kill(process.pid, signal.SIGSTOP)
+                if throttle_done.wait(stopped) or process.poll() is not None:
+                    break
+                if not control.paused.is_set():
+                    os.kill(process.pid, signal.SIGCONT)
+            except ProcessLookupError:
+                break
+    throttle_thread = threading.Thread(target=throttle, name=f"ffmpeg-throttle-{process.pid}", daemon=True)
+    throttle_thread.start()
+    messages: list[str] = []
+    block: dict[str, Any] = {}
+    assert process.stdout is not None
+    for raw_line in process.stdout:
+        if control.cancelled.is_set() and process.poll() is None:
+            process.terminate()
+        line = raw_line.rstrip()
+        if "=" in line:
+            key, value = line.split("=", 1)
+            if key in {"frame", "fps", "bitrate", "total_size", "out_time_us", "out_time_ms", "out_time", "speed", "progress"}:
+                block[key] = value
+                if key == "progress":
+                    try:
+                        # FFmpeg versions disagree whether out_time_ms is microseconds; out_time_us is explicit.
+                        micros = int(block.get("out_time_us") or block.get("out_time_ms") or 0)
+                    except (TypeError, ValueError):
+                        micros = 0
+                    current = max(0.0, micros / 1_000_000)
+                    block["current_seconds"] = current
+                    block["duration_seconds"] = duration
+                    block["percent"] = min(100.0, current / duration * 100) if duration else 0.0
+                    if progress:
+                        progress(dict(block))
+                    block = {}
+                continue
+        if line:
+            messages.append(line)
+            if len(messages) > 200:
+                messages = messages[-200:]
+    return_code = process.wait()
+    throttle_done.set()
+    throttle_thread.join(timeout=1)
+    control.process = None
+    if control.cancelled.is_set():
+        raise MediaToolError("任务已取消")
+    if return_code != 0:
+        raise MediaToolError("FFmpeg 失败：" + "\n".join(messages[-20:]))
+    return messages
+
+
+def sample_verify(path: Path, probe: dict[str, Any], control: ProcessControl | None = None) -> dict[str, Any]:
+    duration = duration_seconds(probe)
+    positions = [0.0]
+    if duration > 2:
+        positions.extend([duration * 0.5, max(0.0, duration - min(3.0, duration * 0.05))])
+    started = time.monotonic()
+    for position in positions:
+        args = ["-v", "error"]
+        if position:
+            args.extend(["-ss", f"{position:.3f}"])
+        args.extend(["-i", str(path), "-map", "0:v:0", "-frames:v", "3", "-f", "null", "-"])
+        run_ffmpeg(args, control=control, duration=duration)
+    return {"status": "passed", "mode": "sample", "positions": positions, "elapsed_seconds": time.monotonic() - started}
+
+
+def full_verify(
+    path: Path,
+    probe: dict[str, Any],
+    control: ProcessControl | None = None,
+    progress: ProgressCallback | None = None,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    started = time.monotonic()
+    duration = duration_seconds(probe)
+    args = ["-v", "error", "-xerror", "-err_detect", "explode", "-i", str(path),
+            "-map", "0:v:0", "-map", "0:a?"]
+    if settings and settings.ffmpeg_threads:
+        args.extend(["-threads", str(settings.ffmpeg_threads)])
+    args.extend(["-f", "null", "-"])
+    run_ffmpeg(
+        args, control=control, progress=progress, duration=duration,
+        nice=settings.ffmpeg_nice if settings else 0,
+        cpu_percent=settings.cpu_percent if settings and settings.cpu_limit_enabled else None,
+    )
+    return {"status": "passed", "mode": "full", "elapsed_seconds": time.monotonic() - started}
+
+
+def conversion_args(source: Path, output: Path, action: str, settings: Settings, profile: str) -> list[str]:
+    args = ["-n", "-i", str(source), "-map", "0", "-map_metadata", "0", "-map_chapters", "0"]
+    if action == "remux":
+        args.extend(["-c", "copy"])
+    elif action == "transcode":
+        crf = PROFILE_CRF[profile]
+        args.extend(["-c", "copy", "-c:v", "libx264", "-crf", str(crf), "-preset", "medium", "-pix_fmt", "yuv420p"])
+        if settings.ffmpeg_threads:
+            args.extend(["-threads", str(settings.ffmpeg_threads)])
+    else:
+        raise ValueError("未知处理类型")
+    args.extend(["-movflags", "+faststart", "-f", "mp4", str(output)])
+    return args
