@@ -19,10 +19,12 @@ from .ffmpeg_tools import (
     conversion_args,
     duration_seconds,
     full_verify,
+    opus_audio_streams,
     probe_media,
     run_ffmpeg,
     sample_verify,
     summarize_probe,
+    timed_id3_streams,
     transcode_backend,
 )
 from .media_scanner import scan_root
@@ -432,7 +434,10 @@ class TaskManager:
                         "duration_seconds": duration, "backend": current_backend,
                     }, started)
                 run_ffmpeg(
-                    conversion_args(source, temporary, action, settings, profile, selected_backend),
+                    conversion_args(
+                        source, temporary, action, settings, profile, selected_backend,
+                        source_probe=source_probe,
+                    ),
                     control=control, progress=on_ffmpeg, duration=duration, nice=settings.ffmpeg_nice,
                     cpu_percent=settings.cpu_percent if settings.cpu_limit_enabled else None,
                 )
@@ -464,10 +469,19 @@ class TaskManager:
                     backup = None
                     raise
                 output_size = target.stat().st_size
-                warning = None
+                warnings: list[str] = []
+                converted_opus = opus_audio_streams(source_probe)
+                if converted_opus:
+                    indexes = "、".join(str(stream.get("index", "?")) for stream in converted_opus)
+                    warnings.append(f"轨道 {indexes} 的 Opus 音频已转为 AAC；原文件已保留")
+                dropped_timed_id3 = timed_id3_streams(source_probe)
+                if dropped_timed_id3:
+                    indexes = "、".join(str(stream.get("index", "?")) for stream in dropped_timed_id3)
+                    warnings.append(f"已丢弃轨道 {indexes} 的 timed_id3 定时数据；原文件已保留")
                 if output_size > stat_before.st_size:
                     difference = output_size - stat_before.st_size
-                    warning = f"输出比原文件大 {difference} 字节"
+                    warnings.append(f"输出比原文件大 {difference} 字节")
+                warning = "；".join(warnings) or None
                 self.db.execute(
                     "UPDATE conversions SET output_path=?,backup_path=?,output_probe_json=?,output_size=?,warning=?,status='completed',completed_at=? WHERE id=?",
                     (str(target), str(backup), json.dumps(summarize_probe(output_probe), ensure_ascii=False), output_size, warning, utc_now(), conversion_id),

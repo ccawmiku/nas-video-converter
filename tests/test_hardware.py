@@ -48,6 +48,28 @@ def test_conversion_arguments_select_requested_encoder() -> None:
     assert hardware[hardware.index("-global_quality") + 1] == "18"
     assert "nv12" in hardware
     assert "-crf" not in hardware
+    assert software[software.index("-map", software.index("-map") + 1) + 1] == "-0:d?"
+
+
+def test_remux_excludes_only_preclassified_data_tracks() -> None:
+    args = conversion_args(Path("input.ts"), Path("output.mp4"), "remux", Settings(), "recommended")
+    assert ["-map", "0", "-map", "-0:d?"] == args[args.index("-map"):args.index("-map") + 4]
+    assert args[args.index("-c") + 1] == "copy"
+
+
+def test_transcode_converts_only_opus_audio_tracks_to_aac() -> None:
+    source_probe = {"streams": [
+        {"index": 0, "codec_type": "video", "codec_name": "vp9"},
+        {"index": 1, "codec_type": "audio", "codec_name": "opus", "channels": 2},
+        {"index": 2, "codec_type": "audio", "codec_name": "aac", "channels": 2},
+    ]}
+    args = conversion_args(
+        Path("input.webm"), Path("output.mp4"), "transcode", Settings(), "recommended", "software",
+        source_probe=source_probe,
+    )
+    assert args[args.index("-c:a:0") + 1] == "aac"
+    assert args[args.index("-b:a:0") + 1] == "192k"
+    assert "-c:a:1" not in args
 
 
 def test_entrypoint_preserves_qsv_supplementary_group() -> None:

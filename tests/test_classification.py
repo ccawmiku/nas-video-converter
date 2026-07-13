@@ -50,3 +50,28 @@ def test_attachment_is_unsupported() -> None:
     assert incompatible_streams(data)
     assert classify_media(Path("attachment.mkv"), data)[0] == "unsupported"
 
+
+def test_timed_id3_is_the_only_droppable_data_track() -> None:
+    data = probe()
+    data["streams"].append({"index": 2, "codec_type": "data", "codec_name": "timed_id3", "disposition": {}})
+    category, reason = classify_media(Path("recording.ts"), data)
+    assert category == "remux"
+    assert "丢弃轨道 2" in reason
+    assert "原文件保留" in reason
+    assert incompatible_streams(data) == []
+
+    data["streams"][-1]["codec_name"] = "bin_data"
+    assert classify_media(Path("recording.ts"), data)[0] == "unsupported"
+
+
+def test_vp9_opus_transcodes_to_universal_mp4() -> None:
+    category, reason = classify_media(Path("vp9-opus.webm"), probe(video="vp9", audio="opus"))
+    assert category == "transcode"
+    assert "H.264" in reason
+    assert "AAC" in reason
+
+
+def test_other_incompatible_audio_remains_unsupported() -> None:
+    category, reason = classify_media(Path("vp9-vorbis.webm"), probe(video="vp9", audio="vorbis"))
+    assert category == "unsupported"
+    assert "vorbis" in reason

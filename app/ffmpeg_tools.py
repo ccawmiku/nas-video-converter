@@ -188,6 +188,24 @@ def summarize_probe(probe: dict[str, Any]) -> dict[str, Any]:
 MP4_VIDEO_CODECS = {"h264", "hevc", "mpeg4", "av1", "vp9", "mjpeg"}
 MP4_AUDIO_CODECS = {"aac", "mp3", "ac3", "eac3", "alac", "flac"}
 MP4_SUBTITLE_CODECS = {"mov_text"}
+DROPPABLE_DATA_CODECS = {"timed_id3"}
+TRANSCODABLE_AUDIO_CODECS = {"opus"}
+
+
+def timed_id3_streams(probe: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        stream for stream in probe.get("streams", [])
+        if stream.get("codec_type") == "data"
+        and str(stream.get("codec_name", "")).lower() in DROPPABLE_DATA_CODECS
+    ]
+
+
+def opus_audio_streams(probe: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        stream for stream in probe.get("streams", [])
+        if stream.get("codec_type") == "audio"
+        and str(stream.get("codec_name", "")).lower() in TRANSCODABLE_AUDIO_CODECS
+    ]
 
 
 def incompatible_streams(probe: dict[str, Any]) -> list[str]:
@@ -200,10 +218,14 @@ def incompatible_streams(probe: dict[str, Any]) -> list[str]:
             reasons.append(f"轨道 {index}：封面附件不能保证原样写入 MP4")
         elif kind == "video" and codec not in MP4_VIDEO_CODECS:
             continue
+        elif kind == "audio" and codec in TRANSCODABLE_AUDIO_CODECS:
+            continue
         elif kind == "audio" and codec not in MP4_AUDIO_CODECS:
             reasons.append(f"轨道 {index}：音频 {codec} 不能按规则原样写入 MP4")
         elif kind == "subtitle" and codec not in MP4_SUBTITLE_CODECS:
             reasons.append(f"轨道 {index}：字幕 {codec} 不能按规则原样写入 MP4")
+        elif kind == "data" and str(codec).lower() in DROPPABLE_DATA_CODECS:
+            continue
         elif kind in {"attachment", "data", "unknown"}:
             reasons.append(f"轨道 {index}：{kind} / {codec} 不能按规则原样写入 MP4")
     return reasons
@@ -219,15 +241,24 @@ def classify_media(path: Path, probe: dict[str, Any]) -> tuple[str, str]:
     ]
     if not videos:
         return "unsupported", "没有可处理的视频轨道"
+    opus_streams = opus_audio_streams(probe)
     format_names = set(str(probe.get("format", {}).get("format_name", "")).split(","))
-    if path.suffix.lower() == ".mp4" or "mp4" in format_names:
+    if (path.suffix.lower() == ".mp4" or "mp4" in format_names) and not opus_streams:
         return "no_conversion", "已是 MP4，仅执行完整性检测"
     incompatible = incompatible_streams(probe)
     if incompatible:
         return "unsupported", "；".join(incompatible)
+    dropped = timed_id3_streams(probe)
+    drop_note = ""
+    if dropped:
+        indexes = "、".join(str(stream.get("index", "?")) for stream in dropped)
+        drop_note = f"；将丢弃轨道 {indexes} 的 timed_id3 定时数据（原文件保留）"
+    if opus_streams:
+        indexes = "、".join(str(stream.get("index", "?")) for stream in opus_streams)
+        return "transcode", f"视频转为 H.264；轨道 {indexes} 的 Opus 音频转为 AAC（原文件保留）{drop_note}"
     if all(s.get("codec_name") in MP4_VIDEO_CODECS for s in videos):
-        return "remux", "全部轨道可原样写入 MP4（-map 0 -c copy）"
-    return "transcode", "普通 SDR 8-bit 视频需转为 H.264，其他轨道保持原样"
+        return "remux", f"兼容轨道可原样写入 MP4（-c copy）{drop_note}"
+    return "transcode", f"普通 SDR 8-bit 视频需转为 H.264，其他兼容轨道保持原样{drop_note}"
 
 
 def _preexec(nice: int) -> Callable[[], None] | None:
@@ -433,8 +464,13 @@ def conversion_args(
     settings: Settings,
     profile: str,
     backend: str | None = None,
+    source_probe: dict[str, Any] | None = None,
 ) -> list[str]:
-    args = ["-n", "-i", str(source), "-map", "0", "-map_metadata", "0", "-map_chapters", "0"]
+    args = [
+        "-n", "-i", str(source),
+        "-map", "0", "-map", "-0:d?",
+        "-map_metadata", "0", "-map_chapters", "0",
+    ]
     if action == "remux":
         args.extend(["-c", "copy"])
     elif action == "transcode":
@@ -454,6 +490,13 @@ def conversion_args(
                 args.extend(["-threads", str(settings.ffmpeg_threads)])
         else:
             raise ValueError(f"未知转码后端：{backend}")
+        audio_streams = [stream for stream in (source_probe or {}).get("streams", []) if stream.get("codec_type") == "audio"]
+        for audio_index, stream in enumerate(audio_streams):
+            if str(stream.get("codec_name", "")).lower() != "opus":
+                continue
+            channels = int(stream.get("channels") or 2)
+            bitrate = "192k" if channels <= 2 else "384k" if channels <= 6 else "512k"
+            args.extend([f"-c:a:{audio_index}", "aac", f"-b:a:{audio_index}", bitrate])
     else:
         raise ValueError("未知处理类型")
     args.extend(["-movflags", "+faststart", "-f", "mp4", str(output)])

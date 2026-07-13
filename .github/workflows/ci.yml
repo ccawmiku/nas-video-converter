@@ -63,6 +63,7 @@ jobs:
           chmod -R 0777 "$CONFIG" "$RUNNER_TEMP/media"
           docker run --entrypoint ffmpeg -v "$RUNNER_TEMP/media:/work:rw" nas-video-converter:smoke -v error -f lavfi -i testsrc2=size=160x90:rate=12 -f lavfi -i sine=frequency=440 -t 2 -c:v libx264 -c:a aac "/work/测试 视频库/电影/深层 [目录]/remux 源.mkv"
           docker run --entrypoint ffmpeg -v "$RUNNER_TEMP/media:/work:rw" nas-video-converter:smoke -v error -f lavfi -i testsrc2=size=160x90:rate=12 -t 2 -c:v mpeg2video "/work/测试 视频库/电影/深层 [目录]/transcode 源.avi"
+          docker run --entrypoint ffmpeg -v "$RUNNER_TEMP/media:/work:rw" nas-video-converter:smoke -v error -f lavfi -i testsrc2=size=160x90:rate=12 -f lavfi -i sine=frequency=660 -t 2 -c:v libvpx-vp9 -deadline realtime -cpu-used 8 -c:a libopus "/work/测试 视频库/电影/深层 [目录]/vp9-opus 源.webm"
           docker run --entrypoint ffmpeg -v "$RUNNER_TEMP/media:/work:rw" nas-video-converter:smoke -v error -f lavfi -i testsrc2=size=160x90:rate=12 -t 2 -c:v libx264 "/work/测试 视频库/电影/深层 [目录]/already.mp4"
           touch "$CONFIG/nas-video-converter.db"
           chmod 0600 "$CONFIG/nas-video-converter.db"
@@ -75,14 +76,15 @@ jobs:
           wait_job "$SCAN"
           STATS=$(curl -fsS "http://127.0.0.1:12012/api/stats?root=$(printf %s "$ROOT" | jq -sRr @uri)")
           test "$(jq -r .categories.remux.count <<<"$STATS")" -eq 1
-          test "$(jq -r .categories.transcode.count <<<"$STATS")" -eq 1
+          test "$(jq -r .categories.transcode.count <<<"$STATS")" -eq 2
           test "$(jq -r .categories.no_conversion.count <<<"$STATS")" -eq 1
           FILES=$(curl -fsS "http://127.0.0.1:12012/api/files?root=$(printf %s "$ROOT" | jq -sRr @uri)&page_size=100")
           REMUX_ID=$(jq -r '.items[]|select(.category=="remux")|.id' <<<"$FILES")
-          TRANSCODE_ID=$(jq -r '.items[]|select(.category=="transcode")|.id' <<<"$FILES")
+          TRANSCODE_ID=$(jq -r '.items[]|select(.relative_path|endswith("transcode 源.avi"))|.id' <<<"$FILES")
+          VP9_OPUS_ID=$(jq -r '.items[]|select(.relative_path|endswith("vp9-opus 源.webm"))|.id' <<<"$FILES")
           MP4_ID=$(jq -r '.items[]|select(.category=="no_conversion")|.id' <<<"$FILES")
           printf 'preexisting' > "$MEDIA/remux 源.mp4"
-          PLAN=$(curl -fsS -X POST http://127.0.0.1:12012/api/plans -H 'Content-Type: application/json' --data "{\"root\":\"$ROOT\",\"actions\":[{\"file_id\":$REMUX_ID,\"action\":\"remux\"},{\"file_id\":$TRANSCODE_ID,\"action\":\"transcode\"}]}" | jq -r .plan_id)
+          PLAN=$(curl -fsS -X POST http://127.0.0.1:12012/api/plans -H 'Content-Type: application/json' --data "{\"root\":\"$ROOT\",\"actions\":[{\"file_id\":$REMUX_ID,\"action\":\"remux\"},{\"file_id\":$TRANSCODE_ID,\"action\":\"transcode\"},{\"file_id\":$VP9_OPUS_ID,\"action\":\"transcode\"}]}" | jq -r .plan_id)
           CONVERT=$(curl -fsS -X POST http://127.0.0.1:12012/api/conversions -H 'Content-Type: application/json' --data "{\"plan_id\":\"$PLAN\",\"profile\":\"recommended\"}" | jq -r .job_id)
           wait_job "$CONVERT"
           VERIFY=$(curl -fsS -X POST http://127.0.0.1:12012/api/verifications -H 'Content-Type: application/json' --data "{\"file_id\":$MP4_ID,\"full\":true}" | jq -r .job_id)
@@ -90,10 +92,14 @@ jobs:
           test "$(cat "$MEDIA/remux 源.mp4")" = preexisting
           test -f "$MEDIA/remux 源 (2).mp4"
           test -f "$MEDIA/transcode 源.mp4"
+          test -f "$MEDIA/vp9-opus 源.mp4"
           test -f "$RUNNER_TEMP/media/测试 视频库/转换前原文件/电影/深层 [目录]/remux 源.mkv"
           test -f "$RUNNER_TEMP/media/测试 视频库/转换前原文件/电影/深层 [目录]/transcode 源.avi"
+          test -f "$RUNNER_TEMP/media/测试 视频库/转换前原文件/电影/深层 [目录]/vp9-opus 源.webm"
           docker run --entrypoint ffprobe -v "$RUNNER_TEMP/media:/work:ro" nas-video-converter:smoke -v error -show_format -show_streams "/work/测试 视频库/电影/深层 [目录]/remux 源 (2).mp4" >/dev/null
           test "$(docker run --entrypoint ffprobe -v "$RUNNER_TEMP/media:/work:ro" nas-video-converter:smoke -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "/work/测试 视频库/电影/深层 [目录]/transcode 源.mp4")" = h264
+          test "$(docker run --entrypoint ffprobe -v "$RUNNER_TEMP/media:/work:ro" nas-video-converter:smoke -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "/work/测试 视频库/电影/深层 [目录]/vp9-opus 源.mp4")" = h264
+          test "$(docker run --entrypoint ffprobe -v "$RUNNER_TEMP/media:/work:ro" nas-video-converter:smoke -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "/work/测试 视频库/电影/深层 [目录]/vp9-opus 源.mp4")" = aac
           docker run --entrypoint ffmpeg -v "$RUNNER_TEMP/media:/work:ro" nas-video-converter:smoke -v error -i "/work/测试 视频库/电影/深层 [目录]/transcode 源.mp4" -frames:v 3 -f null -
 
   publish:
