@@ -13,13 +13,13 @@
 
 ## 项目部署
 
-1. 在群晖建立 `/volume1/docker/nas-video-converter/config`。
+1. 在群晖建立 `/volume2/docker/nas-video-converter/config`，并确保其所有者与 Compose 中的 `PUID:PGID` 一致。
 2. 下载仓库的 `docker-compose.yml`，按实际共享目录修改 volumes 左侧路径。
 3. 保持媒体卷为 `rw`。每个 `/media` 下一级目录会显示为独立根目录。
 4. 在 Container Manager → 项目中从 Compose 创建项目，或 SSH 执行：
 
    ```bash
-   cd /volume1/docker/nas-video-converter
+   cd /volume2/docker/nas-video-converter
    docker compose pull
    docker compose up -d
    ```
@@ -38,5 +38,4 @@ docker compose up -d
 docker compose logs --tail=200 nas-video-converter
 ```
 
-SQLite 位于宿主机 `./config`。更新前停止容器并备份该目录。运行中断后，网页会显示中断任务；`/api/recovery` 只列出遗留临时文件，不会自动处置。
-
+SQLite 位于宿主机 `/volume2/docker/nas-video-converter/config`。更新前停止容器并备份该目录。运行中断后，网页会显示中断任务；`/api/recovery` 只列出遗留临时文件，不会自动处置。

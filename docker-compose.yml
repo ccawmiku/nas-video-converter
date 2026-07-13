@@ -10,7 +10,7 @@ services:
       PGID: "100"
       TZ: Asia/Shanghai
     volumes:
-      - ./config:/config
+      - /volume2/docker/nas-video-converter/config:/config:rw
       # 每个一级子目录会作为网页中的独立映射根目录。媒体目录必须可写。
       - /volume1/video:/media/视频库:rw
       - /volume1/movie:/media/电影:rw
