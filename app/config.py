@@ -26,6 +26,7 @@ class Settings:
     auto_transcode: bool = False
     queue_limit: int = 100
     transcode_profile: str = "recommended"
+    hardware_acceleration: str = "auto"
 
     def update(self, values: dict[str, Any]) -> "Settings":
         allowed = set(asdict(self))
@@ -61,6 +62,8 @@ class Settings:
             raise ValueError("schedule_time 必须为 HH:MM")
         if self.transcode_profile not in {"quality", "recommended", "space"}:
             raise ValueError("未知转码档位")
+        if self.hardware_acceleration not in {"auto", "software", "intel_qsv"}:
+            raise ValueError("hardware_acceleration 必须是 auto、software 或 intel_qsv")
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -83,4 +86,3 @@ EXCLUDED_DIR_NAMES = {
 }
 
 PROFILE_CRF = {"quality": 16, "recommended": 18, "space": 20}
-

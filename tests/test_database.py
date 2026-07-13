@@ -1,3 +1,4 @@
+import sqlite3
 from pathlib import Path
 
 from app.database import Database, utc_now
@@ -24,3 +25,12 @@ def test_settings_and_events_survive_reopen(tmp_path: Path) -> None:
     reopened = Database(path)
     assert reopened.one("SELECT id FROM events WHERE id=?", (event_id,))
 
+
+def test_existing_database_adds_conversion_backend_column(tmp_path: Path) -> None:
+    path = tmp_path / "legacy.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE conversions (id INTEGER PRIMARY KEY AUTOINCREMENT)")
+    Database(path)
+    with sqlite3.connect(path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(conversions)")}
+    assert "backend" in columns

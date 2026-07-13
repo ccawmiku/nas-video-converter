@@ -13,11 +13,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MEDIA_ROOT=/media \
     CONFIG_DIR=/config \
     TZ=Asia/Shanghai \
-    PUID=1024 \
-    PGID=100
+    PUID=1026 \
+    PGID=100 \
+    QSV_DEVICE=/dev/dri/renderD128 \
+    LIBVA_DRIVER_NAME=iHD
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg gosu tini tzdata \
+    && apt-get install -y --no-install-recommends ffmpeg gosu tini tzdata intel-media-va-driver \
     && apt-get clean
 
 WORKDIR /app

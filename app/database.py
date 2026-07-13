@@ -114,6 +114,7 @@ class Database:
                     output_probe_json TEXT NOT NULL DEFAULT '{}',
                     source_size INTEGER NOT NULL,
                     output_size INTEGER,
+                    backend TEXT,
                     warning TEXT,
                     status TEXT NOT NULL,
                     created_at TEXT NOT NULL,
@@ -121,6 +122,9 @@ class Database:
                 );
                 """
             )
+            conversion_columns = {row[1] for row in conn.execute("PRAGMA table_info(conversions)")}
+            if "backend" not in conversion_columns:
+                conn.execute("ALTER TABLE conversions ADD COLUMN backend TEXT")
             conn.execute(
                 "UPDATE jobs SET state='interrupted', error=COALESCE(error, '容器或服务在任务运行时中断'), "
                 "completed_at=?, updated_at=? WHERE state IN ('running','pausing','paused','cancelling')",

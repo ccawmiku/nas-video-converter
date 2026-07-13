@@ -375,15 +375,85 @@ def full_verify(
     return {"status": "passed", "mode": "full", "elapsed_seconds": time.monotonic() - started}
 
 
-def conversion_args(source: Path, output: Path, action: str, settings: Settings, profile: str) -> list[str]:
+def intel_qsv_status(device: Path | None = None) -> dict[str, Any]:
+    device = device or Path(os.getenv("QSV_DEVICE", "/dev/dri/renderD128"))
+    try:
+        completed = subprocess.run(
+            [FFMPEG_BIN, "-hide_banner", "-encoders"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+        )
+        encoder_available = completed.returncode == 0 and "h264_qsv" in completed.stdout
+        encoder_error = completed.stderr.strip() if completed.returncode else ""
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        encoder_available = False
+        encoder_error = str(exc)
+    device_exists = device.exists()
+    device_readable = device_exists and os.access(device, os.R_OK)
+    device_writable = device_exists and os.access(device, os.W_OK)
+    available = encoder_available and device_readable and device_writable
+    if not encoder_available:
+        reason = f"FFmpeg 不提供 h264_qsv 编码器{f'：{encoder_error}' if encoder_error else ''}"
+    elif not device_exists:
+        reason = f"未映射 Intel 渲染设备 {device}"
+    elif not device_readable or not device_writable:
+        reason = f"容器用户对 {device} 没有读写权限"
+    else:
+        reason = "Intel Quick Sync H.264 可用"
+    return {
+        "available": available,
+        "backend": "intel_qsv",
+        "device": str(device),
+        "device_exists": device_exists,
+        "device_readable": device_readable,
+        "device_writable": device_writable,
+        "encoder_available": encoder_available,
+        "reason": reason,
+    }
+
+
+def transcode_backend(settings: Settings) -> str:
+    if settings.hardware_acceleration == "software":
+        return "software"
+    status = intel_qsv_status()
+    if status["available"]:
+        return "intel_qsv"
+    if settings.hardware_acceleration == "intel_qsv":
+        raise MediaToolError(f"Intel Quick Sync 已被强制启用，但当前不可用：{status['reason']}")
+    return "software"
+
+
+def conversion_args(
+    source: Path,
+    output: Path,
+    action: str,
+    settings: Settings,
+    profile: str,
+    backend: str | None = None,
+) -> list[str]:
     args = ["-n", "-i", str(source), "-map", "0", "-map_metadata", "0", "-map_chapters", "0"]
     if action == "remux":
         args.extend(["-c", "copy"])
     elif action == "transcode":
-        crf = PROFILE_CRF[profile]
-        args.extend(["-c", "copy", "-c:v", "libx264", "-crf", str(crf), "-preset", "medium", "-pix_fmt", "yuv420p"])
-        if settings.ffmpeg_threads:
-            args.extend(["-threads", str(settings.ffmpeg_threads)])
+        quality = PROFILE_CRF[profile]
+        backend = backend or transcode_backend(settings)
+        if backend == "intel_qsv":
+            args.extend([
+                "-c", "copy", "-c:v", "h264_qsv", "-global_quality", str(quality),
+                "-preset", "medium", "-pix_fmt", "nv12",
+            ])
+        elif backend == "software":
+            args.extend([
+                "-c", "copy", "-c:v", "libx264", "-crf", str(quality),
+                "-preset", "medium", "-pix_fmt", "yuv420p",
+            ])
+            if settings.ffmpeg_threads:
+                args.extend(["-threads", str(settings.ffmpeg_threads)])
+        else:
+            raise ValueError(f"未知转码后端：{backend}")
     else:
         raise ValueError("未知处理类型")
     args.extend(["-movflags", "+faststart", "-f", "mp4", str(output)])

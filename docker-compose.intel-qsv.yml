@@ -1,0 +1,4 @@
+services:
+  nas-video-converter:
+    devices:
+      - /dev/dri/renderD128:/dev/dri/renderD128

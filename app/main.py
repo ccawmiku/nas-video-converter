@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from . import __version__
 from .config import BASE_MEDIA_DIR, DATABASE_PATH, Settings
 from .database import Database, utc_now
+from .ffmpeg_tools import intel_qsv_status
 from .media_scanner import allowed_root, discover_roots
 from .safety import SafetyError, ensure_safe_path, is_excluded
 from .task_manager import TaskError, TaskManager
@@ -150,6 +151,11 @@ def roots():
 @app.get("/api/settings")
 def get_settings():
     return load_settings().as_dict()
+
+
+@app.get("/api/hardware")
+def hardware_status():
+    return {"intel_qsv": intel_qsv_status()}
 
 
 @app.put("/api/settings")

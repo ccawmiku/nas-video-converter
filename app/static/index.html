@@ -39,7 +39,7 @@
 
     <section class="panel">
       <div class="section-title"><div><p class="eyebrow">SCAN PLAN</p><h2>文件与处理计划</h2></div><div class="filters"><input id="search" placeholder="搜索路径"><select id="category"><option value="">全部分类</option><option value="no_conversion">无需转换</option><option value="remux">可无损换封装</option><option value="transcode">需要重新编码</option><option value="unsupported">无法处理</option><option value="skipped">跳过</option></select></div></div>
-      <div class="batchbar"><label><input type="checkbox" id="selectAll"> 全选当前可处理项</label><span id="selectedCount">已选 0 项</span><select id="profile"><option value="quality">高质量 CRF 16</option><option selected value="recommended">推荐 CRF 18</option><option value="space">节省空间 CRF 20</option></select><button id="confirmBtn" class="primary" disabled>确认计划</button><button id="runBtn" class="primary" disabled>正式运行</button></div>
+      <div class="batchbar"><label><input type="checkbox" id="selectAll"> 全选当前可处理项</label><span id="selectedCount">已选 0 项</span><select id="profile"><option value="quality">高质量（16）</option><option selected value="recommended">推荐（18）</option><option value="space">节省空间（20）</option></select><button id="confirmBtn" class="primary" disabled>确认计划</button><button id="runBtn" class="primary" disabled>正式运行</button></div>
       <div class="table-wrap"><table><thead><tr><th></th><th>相对路径</th><th>分类</th><th>技术信息</th><th>完整性</th><th>大小</th><th>原因 / 操作</th></tr></thead><tbody id="fileRows"></tbody></table></div>
     </section>
 

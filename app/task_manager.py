@@ -23,6 +23,7 @@ from .ffmpeg_tools import (
     run_ffmpeg,
     sample_verify,
     summarize_probe,
+    transcode_backend,
 )
 from .media_scanner import scan_root
 from .safety import (
@@ -380,6 +381,11 @@ class TaskManager:
         settings = self.settings_getter()
         profile = job["options"]["profile"]
         snapshots = job["options"]["snapshots"]
+        selected_backend = (
+            transcode_backend(settings)
+            if any(snapshot["action"] == "transcode" for snapshot in snapshots.values())
+            else "stream_copy"
+        )
         rows = self.db.query(
             f"SELECT * FROM files WHERE id IN ({','.join('?' for _ in job['file_ids'])}) ORDER BY relative_path",
             tuple(job["file_ids"]),
@@ -405,9 +411,9 @@ class TaskManager:
             output_probe: dict[str, Any] = {}
             backup: Path | None = None
             conversion_id = self.db.execute(
-                "INSERT INTO conversions(job_id,file_id,source_path,source_probe_json,source_size,status,created_at) VALUES(?,?,?,?,?,?,?)",
+                "INSERT INTO conversions(job_id,file_id,source_path,source_probe_json,source_size,backend,status,created_at) VALUES(?,?,?,?,?,?,?,?)",
                 (job["id"], row["id"], str(source), json.dumps(summarize_probe(source_probe), ensure_ascii=False),
-                 stat_before.st_size, "running", utc_now()),
+                 stat_before.st_size, "stream_copy" if action == "remux" else selected_backend, "running", utc_now()),
             )
             try:
                 duration = duration_seconds(source_probe)
@@ -415,7 +421,9 @@ class TaskManager:
                     file_fraction = float(data.get("percent") or 0) / 100
                     overall = (index + file_fraction) / len(rows) * 100
                     self._progress(job["id"], {
-                        "stage": "无损换封装" if action == "remux" else "视频重新编码",
+                        "stage": "无损换封装" if action == "remux" else (
+                            "视频重新编码（Intel QSV）" if selected_backend == "intel_qsv" else "视频重新编码（libx264）"
+                        ),
                         "current_file": row["relative_path"], "file_percent": data.get("percent", 0),
                         "percent": overall, "completed": index, "total": len(rows),
                         "processed_bytes": processed_bytes, "total_bytes": total_bytes,
@@ -423,7 +431,7 @@ class TaskManager:
                         "duration_seconds": duration,
                     }, started)
                 run_ffmpeg(
-                    conversion_args(source, temporary, action, settings, profile),
+                    conversion_args(source, temporary, action, settings, profile, selected_backend),
                     control=control, progress=on_ffmpeg, duration=duration, nice=settings.ffmpeg_nice,
                     cpu_percent=settings.cpu_percent if settings.cpu_limit_enabled else None,
                 )
@@ -467,6 +475,7 @@ class TaskManager:
                     "file_id": row["id"], "source_path": str(source), "output_path": str(target),
                     "backup_path": str(backup), "source_size": stat_before.st_size, "output_size": output_size,
                     "size_difference": output_size - stat_before.st_size, "warning": warning, "action": action,
+                    "backend": "stream_copy" if action == "remux" else selected_backend,
                 })
                 processed_bytes += stat_before.st_size
                 self._progress(job["id"], {
@@ -488,4 +497,4 @@ class TaskManager:
                 raise TaskError(f"{row['relative_path']}：{exc}") from exc
             if settings.cooldown_seconds and index + 1 < len(rows):
                 time.sleep(settings.cooldown_seconds)
-        return {"completed": completed, "count": len(completed), "total": len(rows)}
+        return {"completed": completed, "count": len(completed), "total": len(rows), "backend": selected_backend}

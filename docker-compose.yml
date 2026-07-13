@@ -1,12 +1,12 @@
 services:
   nas-video-converter:
-    image: ghcr.io/ccawmiku/nas-video-converter:1.0.2
+    image: ghcr.io/ccawmiku/nas-video-converter:1.0.3
     container_name: nas-video-converter
     restart: unless-stopped
     ports:
       - "12012:12012"
     environment:
-      PUID: "1024"
+      PUID: "1026"
       PGID: "100"
       TZ: Asia/Shanghai
     volumes:
