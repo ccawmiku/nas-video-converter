@@ -20,9 +20,10 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Ensure FFmpeg is available
+        run: command -v ffmpeg >/dev/null || (sudo apt-get update && sudo apt-get install -y ffmpeg)
       - run: pip install -r requirements-dev.txt
-      - run: pytest --cov=app --cov-report=term-missing
+      - run: python -m pytest --cov=app --cov-report=term-missing
       - name: Verify no media deletion call exists
         run: python -m pytest tests/test_safety.py::test_application_has_no_media_delete_calls
 
