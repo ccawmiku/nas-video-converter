@@ -20,8 +20,6 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: Ensure FFmpeg is available
-        run: command -v ffmpeg >/dev/null || (sudo apt-get update && sudo apt-get install -y ffmpeg)
       - run: pip install -r requirements-dev.txt
       - run: python -m pytest --cov=app --cov-report=term-missing
       - name: Verify no media deletion call exists

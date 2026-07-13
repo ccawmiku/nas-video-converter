@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import importlib
+import shutil
 import subprocess
 import time
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 import app.config as config
+
+
+pytestmark = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="需要 FFmpeg；CI 容器烟雾测试覆盖真实媒体流程")
 
 
 def test_http_scan_settings_and_recovery(tmp_path: Path) -> None:
