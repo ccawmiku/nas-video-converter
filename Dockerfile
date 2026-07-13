@@ -1,5 +1,10 @@
 FROM python:3.12-slim-bookworm
 
+LABEL org.opencontainers.image.source="https://github.com/ccawmiku/nas-video-converter" \
+      org.opencontainers.image.title="NAS Video Converter" \
+      org.opencontainers.image.description="Safe, plan-first NAS video inspection and conversion service" \
+      org.opencontainers.image.licenses="MIT"
+
 ARG TARGETARCH
 RUN test "$TARGETARCH" = "amd64" || (echo "Only linux/amd64 is supported" >&2; exit 1)
 
