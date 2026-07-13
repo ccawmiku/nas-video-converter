@@ -48,12 +48,12 @@ jobs:
           CONFIG="$RUNNER_TEMP/config"
           mkdir -p "$MEDIA" "$CONFIG"
           chmod -R 0777 "$CONFIG" "$RUNNER_TEMP/media"
-          ffmpeg -v error -f lavfi -i testsrc2=size=160x90:rate=12 -f lavfi -i sine=frequency=440 -t 2 -c:v libx264 -c:a aac "$MEDIA/remux 源.mkv"
-          ffmpeg -v error -f lavfi -i testsrc2=size=160x90:rate=12 -t 2 -c:v mpeg2video "$MEDIA/transcode 源.avi"
-          ffmpeg -v error -f lavfi -i testsrc2=size=160x90:rate=12 -t 2 -c:v libx264 "$MEDIA/already.mp4"
+          docker run --entrypoint ffmpeg -v "$RUNNER_TEMP/media:/work:rw" nas-video-converter:smoke -v error -f lavfi -i testsrc2=size=160x90:rate=12 -f lavfi -i sine=frequency=440 -t 2 -c:v libx264 -c:a aac "/work/测试 视频库/电影/深层 [目录]/remux 源.mkv"
+          docker run --entrypoint ffmpeg -v "$RUNNER_TEMP/media:/work:rw" nas-video-converter:smoke -v error -f lavfi -i testsrc2=size=160x90:rate=12 -t 2 -c:v mpeg2video "/work/测试 视频库/电影/深层 [目录]/transcode 源.avi"
+          docker run --entrypoint ffmpeg -v "$RUNNER_TEMP/media:/work:rw" nas-video-converter:smoke -v error -f lavfi -i testsrc2=size=160x90:rate=12 -t 2 -c:v libx264 "/work/测试 视频库/电影/深层 [目录]/already.mp4"
           docker run -d --name nvc-smoke -p 12012:12012 -e PUID=1024 -e PGID=100 -v "$RUNNER_TEMP/media:/media:rw" -v "$CONFIG:/config" nas-video-converter:smoke
           for i in {1..60}; do curl -fsS http://127.0.0.1:12012/health && break; sleep 1; done
-          test "$(docker exec nvc-smoke sh -c 'printf %s "$(id -u):$(id -g)"')" = "1024:100"
+          test "$(docker top nvc-smoke -eo uid,gid,pid,comm | awk '$4 == "uvicorn" {print $1 ":" $2}')" = "1024:100"
           ROOT='/media/测试 视频库'
           SCAN=$(curl -fsS -X POST http://127.0.0.1:12012/api/scans -H 'Content-Type: application/json' --data "{\"root\":\"$ROOT\"}" | jq -r .job_id)
           wait_job() { for i in {1..120}; do STATE=$(curl -fsS "http://127.0.0.1:12012/api/jobs/$1" | jq -r .state); case "$STATE" in completed) return 0;; failed|cancelled|interrupted) curl -fsS "http://127.0.0.1:12012/api/jobs/$1"; return 1;; esac; sleep 1; done; return 1; }
@@ -77,9 +77,9 @@ jobs:
           test -f "$MEDIA/transcode 源.mp4"
           test -f "$RUNNER_TEMP/media/测试 视频库/转换前原文件/电影/深层 [目录]/remux 源.mkv"
           test -f "$RUNNER_TEMP/media/测试 视频库/转换前原文件/电影/深层 [目录]/transcode 源.avi"
-          ffprobe -v error -show_format -show_streams "$MEDIA/remux 源 (2).mp4" >/dev/null
-          test "$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "$MEDIA/transcode 源.mp4")" = h264
-          ffmpeg -v error -i "$MEDIA/transcode 源.mp4" -frames:v 3 -f null -
+          docker run --entrypoint ffprobe -v "$RUNNER_TEMP/media:/work:ro" nas-video-converter:smoke -v error -show_format -show_streams "/work/测试 视频库/电影/深层 [目录]/remux 源 (2).mp4" >/dev/null
+          test "$(docker run --entrypoint ffprobe -v "$RUNNER_TEMP/media:/work:ro" nas-video-converter:smoke -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "/work/测试 视频库/电影/深层 [目录]/transcode 源.mp4")" = h264
+          docker run --entrypoint ffmpeg -v "$RUNNER_TEMP/media:/work:ro" nas-video-converter:smoke -v error -i "/work/测试 视频库/电影/深层 [目录]/transcode 源.mp4" -frames:v 3 -f null -
 
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
