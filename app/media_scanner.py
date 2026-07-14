@@ -8,10 +8,17 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable
 
-from .config import BASE_MEDIA_DIR, EXCLUDED_DIR_NAMES, VIDEO_EXTENSIONS, Settings
+from .config import BASE_MEDIA_DIR, CORRUPT_DIR_NAME, EXCLUDED_DIR_NAMES, VIDEO_EXTENSIONS, Settings
 from .database import Database, utc_now
 from .ffmpeg_tools import MediaToolError, ProcessControl, classify_media, full_verify, probe_media, sample_verify, summarize_probe
-from .safety import SafetyError, ensure_safe_path, ensure_safe_root, is_excluded
+from .safety import (
+    SafetyError,
+    ensure_safe_path,
+    ensure_safe_root,
+    is_excluded,
+    safe_rename,
+    unique_preserved_path,
+)
 
 
 ScanProgress = Callable[[dict[str, Any]], None]
@@ -55,6 +62,30 @@ def allowed_root(requested: str, base: Path = BASE_MEDIA_DIR) -> Path:
     if resolved not in choices:
         raise SafetyError("只能选择已映射的媒体根目录")
     return ensure_safe_root(choices[resolved])
+
+
+def reclassify_stored_files(db: Database) -> int:
+    updated = 0
+    rows = db.query(
+        "SELECT id,path,category,reason,probe_json FROM files WHERE integrity_status='passed'"
+    )
+    for row in rows:
+        try:
+            stored_probe = json.loads(row["probe_json"] or "{}")
+            probe = stored_probe.get("raw") if isinstance(stored_probe, dict) else None
+            if not isinstance(probe, dict) or not probe.get("streams"):
+                continue
+            category, reason = classify_media(Path(row["path"]), probe)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if category == row["category"] and reason == row["reason"]:
+            continue
+        db.execute(
+            "UPDATE files SET category=?,reason=?,updated_at=? WHERE id=?",
+            (category, reason, utc_now(), row["id"]),
+        )
+        updated += 1
+    return updated
 
 
 def enumerate_videos(
@@ -177,11 +208,31 @@ def inspect_file(
         if (stat_after.st_size, stat_after.st_mtime_ns) != (stat_before.st_size, stat_before.st_mtime_ns):
             category, reason = "skipped", "检测期间文件发生变化，视为仍在写入"
             integrity_status = "changed"
-    except (MediaToolError, OSError) as exc:
+    except MediaToolError as exc:
         if control and control.cancelled.is_set():
             raise ScanCancelled("扫描任务已取消") from exc
         probe = {}
-        category, reason = "skipped", f"文件损坏或检测失败：{exc}"
+        category, reason = "skipped", f"文件损坏或严格检测失败：{exc}"
+        integrity_status = "failed"
+        integrity = {"status": "failed", "error": str(exc)}
+        try:
+            stat_after = path.stat()
+            if (stat_after.st_size, stat_after.st_mtime_ns) != (stat_before.st_size, stat_before.st_mtime_ns):
+                reason += "；检测期间文件发生变化，未自动移动"
+            else:
+                quarantine = unique_preserved_path(root, root / CORRUPT_DIR_NAME, relative)
+                safe_rename(root, path, quarantine)
+                path = quarantine.resolve(strict=True)
+                relative = path.relative_to(root)
+                integrity["quarantined_path"] = str(path)
+                reason = f"已确认损坏并安全移动到 {relative}：{exc}"
+                db.log("warning", "corrupt-file", reason, {"path": str(path)})
+        except (OSError, SafetyError) as move_exc:
+            reason += f"；自动移动到 {CORRUPT_DIR_NAME} 失败：{move_exc}"
+            integrity["quarantine_error"] = str(move_exc)
+    except OSError as exc:
+        probe = {}
+        category, reason = "skipped", f"文件读取或权限失败，未自动移动：{exc}"
         integrity_status = "failed"
         integrity = {"status": "failed", "error": str(exc)}
     return {

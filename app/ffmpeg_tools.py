@@ -406,7 +406,7 @@ def full_verify(
     return {"status": "passed", "mode": "full", "elapsed_seconds": time.monotonic() - started}
 
 
-def intel_qsv_status(device: Path | None = None) -> dict[str, Any]:
+def intel_qsv_status(device: Path | None = None, *, probe_encode: bool = True) -> dict[str, Any]:
     device = device or Path(os.getenv("QSV_DEVICE", "/dev/dri/renderD128"))
     try:
         completed = subprocess.run(
@@ -425,15 +425,47 @@ def intel_qsv_status(device: Path | None = None) -> dict[str, Any]:
     device_exists = device.exists()
     device_readable = device_exists and os.access(device, os.R_OK)
     device_writable = device_exists and os.access(device, os.W_OK)
-    available = encoder_available and device_readable and device_writable
+    base_available = encoder_available and device_readable and device_writable
+    runtime_tested = False
+    runtime_available: bool | None = None
+    runtime_error = ""
+    if base_available and probe_encode:
+        runtime_tested = True
+        try:
+            completed = subprocess.run(
+                [
+                    FFMPEG_BIN, "-hide_banner", "-loglevel", "error",
+                    "-qsv_device", str(device),
+                    "-f", "lavfi", "-i", "color=size=64x64:rate=1",
+                    "-frames:v", "1", "-c:v", "h264_qsv", "-global_quality", "18",
+                    "-f", "null", "-",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=15,
+            )
+            runtime_available = completed.returncode == 0
+            if not runtime_available:
+                lines = (completed.stderr or completed.stdout or "未知 QSV 初始化错误").strip().splitlines()
+                runtime_error = " ".join(lines[-4:])[-1000:]
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            runtime_available = False
+            runtime_error = str(exc)
+    available = base_available and (not probe_encode or runtime_available is True)
     if not encoder_available:
         reason = f"FFmpeg 不提供 h264_qsv 编码器{f'：{encoder_error}' if encoder_error else ''}"
     elif not device_exists:
         reason = f"未映射 Intel 渲染设备 {device}"
     elif not device_readable or not device_writable:
         reason = f"容器用户对 {device} 没有读写权限"
+    elif runtime_tested and not runtime_available:
+        reason = f"QSV 实际编码测试失败：{runtime_error}"
+    elif not probe_encode:
+        reason = "Intel QSV 设备与编码器基础检查通过"
     else:
-        reason = "Intel Quick Sync H.264 可用"
+        reason = "Intel Quick Sync H.264 实际编码测试通过"
     return {
         "available": available,
         "backend": "intel_qsv",
@@ -442,6 +474,9 @@ def intel_qsv_status(device: Path | None = None) -> dict[str, Any]:
         "device_readable": device_readable,
         "device_writable": device_writable,
         "encoder_available": encoder_available,
+        "runtime_tested": runtime_tested,
+        "runtime_available": runtime_available,
+        "runtime_error": runtime_error,
         "reason": reason,
     }
 
@@ -466,24 +501,32 @@ def conversion_args(
     backend: str | None = None,
     source_probe: dict[str, Any] | None = None,
 ) -> list[str]:
-    args = [
-        "-n", "-i", str(source),
+    resolved_backend = backend
+    if action == "transcode":
+        resolved_backend = resolved_backend or transcode_backend(settings)
+    args = ["-n"]
+    if action == "transcode" and resolved_backend == "intel_qsv":
+        args.extend(["-qsv_device", os.getenv("QSV_DEVICE", "/dev/dri/renderD128")])
+    args.extend([
+        "-i", str(source),
         "-map", "0", "-map", "-0:d?",
         "-map_metadata", "0", "-map_chapters", "0",
-    ]
+    ])
     if action == "remux":
         args.extend(["-c", "copy"])
     elif action == "transcode":
         quality = PROFILE_CRF[profile]
-        backend = backend or transcode_backend(settings)
+        backend = resolved_backend
         if backend == "intel_qsv":
             args.extend([
-                "-c", "copy", "-c:v", "h264_qsv", "-global_quality", str(quality),
+                "-c", "copy", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+                "-c:v", "h264_qsv", "-global_quality", str(quality),
                 "-preset", "medium", "-pix_fmt", "nv12",
             ])
         elif backend == "software":
             args.extend([
-                "-c", "copy", "-c:v", "libx264", "-crf", str(quality),
+                "-c", "copy", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+                "-c:v", "libx264", "-crf", str(quality),
                 "-preset", "medium", "-pix_fmt", "yuv420p",
             ])
             if settings.ffmpeg_threads:

@@ -39,7 +39,7 @@ jobs:
           load: true
           tags: nas-video-converter:smoke
       - name: Verify Intel QSV encoder is packaged
-        run: docker run --rm --entrypoint sh nas-video-converter:smoke -c 'ffmpeg -hide_banner -encoders 2>/dev/null | grep -q h264_qsv'
+        run: docker run --rm --entrypoint sh nas-video-converter:smoke -c 'ffmpeg -hide_banner -encoders 2>/dev/null | grep -q h264_qsv && ffmpeg -hide_banner -h full 2>/dev/null | grep -q qsv_device'
       - name: Verify QSV supplementary group permission
         shell: bash
         run: |
@@ -52,7 +52,7 @@ jobs:
             -e PUID=1026 -e PGID=100 -e QSV_DEVICE=/tmp/renderD128 \
             -v "$QSV_FAKE:/tmp/renderD128" \
             nas-video-converter:smoke \
-            python -c 'from app.ffmpeg_tools import intel_qsv_status; status = intel_qsv_status(); assert status["available"], status'
+            python -c 'from app.ffmpeg_tools import intel_qsv_status; status = intel_qsv_status(probe_encode=False); assert status["available"], status'
       - name: Real container smoke test
         shell: bash
         run: |
@@ -63,7 +63,7 @@ jobs:
           chmod -R 0777 "$CONFIG" "$RUNNER_TEMP/media"
           docker run --entrypoint ffmpeg -v "$RUNNER_TEMP/media:/work:rw" nas-video-converter:smoke -v error -f lavfi -i testsrc2=size=160x90:rate=12 -f lavfi -i sine=frequency=440 -t 2 -c:v libx264 -c:a aac "/work/测试 视频库/电影/深层 [目录]/remux 源.mkv"
           docker run --entrypoint ffmpeg -v "$RUNNER_TEMP/media:/work:rw" nas-video-converter:smoke -v error -f lavfi -i testsrc2=size=160x90:rate=12 -t 2 -c:v mpeg2video "/work/测试 视频库/电影/深层 [目录]/transcode 源.avi"
-          docker run --entrypoint ffmpeg -v "$RUNNER_TEMP/media:/work:rw" nas-video-converter:smoke -v error -f lavfi -i testsrc2=size=160x90:rate=12 -f lavfi -i sine=frequency=660 -t 2 -c:v libvpx-vp9 -deadline realtime -cpu-used 8 -c:a libopus "/work/测试 视频库/电影/深层 [目录]/vp9-opus 源.webm"
+          docker run --entrypoint ffmpeg -v "$RUNNER_TEMP/media:/work:rw" nas-video-converter:smoke -v error -f lavfi -i testsrc=size=159x90:rate=12 -f lavfi -i sine=frequency=660 -t 2 -c:v libvpx-vp9 -deadline realtime -cpu-used 8 -c:a libopus "/work/测试 视频库/电影/深层 [目录]/vp9-opus 源.webm"
           docker run --entrypoint ffmpeg -v "$RUNNER_TEMP/media:/work:rw" nas-video-converter:smoke -v error -f lavfi -i testsrc2=size=160x90:rate=12 -t 2 -c:v libx264 "/work/测试 视频库/电影/深层 [目录]/already.mp4"
           touch "$CONFIG/nas-video-converter.db"
           chmod 0600 "$CONFIG/nas-video-converter.db"
@@ -99,6 +99,7 @@ jobs:
           docker run --entrypoint ffprobe -v "$RUNNER_TEMP/media:/work:ro" nas-video-converter:smoke -v error -show_format -show_streams "/work/测试 视频库/电影/深层 [目录]/remux 源 (2).mp4" >/dev/null
           test "$(docker run --entrypoint ffprobe -v "$RUNNER_TEMP/media:/work:ro" nas-video-converter:smoke -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "/work/测试 视频库/电影/深层 [目录]/transcode 源.mp4")" = h264
           test "$(docker run --entrypoint ffprobe -v "$RUNNER_TEMP/media:/work:ro" nas-video-converter:smoke -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "/work/测试 视频库/电影/深层 [目录]/vp9-opus 源.mp4")" = h264
+          test "$(docker run --entrypoint ffprobe -v "$RUNNER_TEMP/media:/work:ro" nas-video-converter:smoke -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0:s=x "/work/测试 视频库/电影/深层 [目录]/vp9-opus 源.mp4")" = 160x90
           test "$(docker run --entrypoint ffprobe -v "$RUNNER_TEMP/media:/work:ro" nas-video-converter:smoke -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "/work/测试 视频库/电影/深层 [目录]/vp9-opus 源.mp4")" = aac
           docker run --entrypoint ffmpeg -v "$RUNNER_TEMP/media:/work:ro" nas-video-converter:smoke -v error -i "/work/测试 视频库/电影/深层 [目录]/transcode 源.mp4" -frames:v 3 -f null -
 

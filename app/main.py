@@ -18,7 +18,7 @@ from . import __version__
 from .config import BASE_MEDIA_DIR, DATABASE_PATH, Settings
 from .database import Database, utc_now
 from .ffmpeg_tools import intel_qsv_status
-from .media_scanner import allowed_root, discover_roots
+from .media_scanner import allowed_root, discover_roots, reclassify_stored_files
 from .safety import SafetyError, ensure_safe_path, is_excluded
 from .task_manager import TaskError, TaskManager
 
@@ -102,6 +102,9 @@ automation: AutomationLoop | None = None
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global automation
+    reclassified = reclassify_stored_files(db)
+    if reclassified:
+        db.log("info", "classification", f"已按当前版本自动更新 {reclassified} 条历史分类")
     automation = AutomationLoop()
     yield
     automation.close()

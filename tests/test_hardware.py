@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
 import pytest
 
 from app.config import Settings
-from app.ffmpeg_tools import MediaToolError, conversion_args, transcode_backend
+from app.ffmpeg_tools import MediaToolError, conversion_args, intel_qsv_status, transcode_backend
 
 
 def qsv_status(available: bool) -> dict:
@@ -42,11 +43,15 @@ def test_conversion_arguments_select_requested_encoder() -> None:
     assert "libx264" in software
     assert software[software.index("-crf") + 1] == "18"
     assert "yuv420p" in software
+    assert software[software.index("-vf") + 1] == "pad=ceil(iw/2)*2:ceil(ih/2)*2"
 
     hardware = conversion_args(source, output, "transcode", settings, "recommended", "intel_qsv")
     assert "h264_qsv" in hardware
     assert hardware[hardware.index("-global_quality") + 1] == "18"
     assert "nv12" in hardware
+    assert hardware[hardware.index("-vf") + 1] == "pad=ceil(iw/2)*2:ceil(ih/2)*2"
+    assert hardware[hardware.index("-qsv_device") + 1] == "/dev/dri/renderD128"
+    assert hardware.index("-qsv_device") < hardware.index("-i")
     assert "-crf" not in hardware
     assert software[software.index("-map", software.index("-map") + 1) + 1] == "-0:d?"
 
@@ -76,3 +81,28 @@ def test_entrypoint_preserves_qsv_supplementary_group() -> None:
     entrypoint = (Path(__file__).parents[1] / "scripts" / "docker-entrypoint.sh").read_text(encoding="utf-8")
     assert 'exec gosu "$NVC_USER" "$@"' in entrypoint
     assert 'exec gosu "$NVC_USER:$PGID" "$@"' not in entrypoint
+
+
+def test_qsv_status_runs_an_actual_encode_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    device = tmp_path / "renderD128"
+    device.write_bytes(b"device-placeholder")
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        if "-encoders" in command:
+            return subprocess.CompletedProcess(command, 0, stdout=" V..... h264_qsv Intel QSV", stderr="")
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="Error creating a MFX session")
+
+    monkeypatch.setattr("app.ffmpeg_tools.subprocess.run", fake_run)
+    status = intel_qsv_status(device)
+    assert not status["available"]
+    assert status["runtime_tested"]
+    assert "MFX session" in status["reason"]
+    assert calls[1][calls[1].index("-qsv_device") + 1] == str(device)
+
+    calls.clear()
+    base = intel_qsv_status(device, probe_encode=False)
+    assert base["available"]
+    assert not base["runtime_tested"]
+    assert len(calls) == 1

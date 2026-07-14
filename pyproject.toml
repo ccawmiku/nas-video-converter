@@ -1,6 +1,6 @@
 [project]
 name = "nas-video-converter"
-version = "1.0.5"
+version = "1.0.6"
 description = "Safe, plan-first NAS video inspection and conversion service"
 requires-python = ">=3.11"
 dependencies = [

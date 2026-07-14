@@ -10,7 +10,7 @@ import pytest
 
 from app.config import Settings
 from app.database import Database
-from app.media_scanner import scan_root
+from app.media_scanner import enumerate_videos, scan_root
 from app.task_manager import TaskManager
 
 
@@ -98,7 +98,7 @@ def test_vp9_opus_transcodes_to_h264_aac_and_preserves_source(tmp_path: Path) ->
     root.mkdir()
     source = root / "vp9-opus.webm"
     ffmpeg(
-        "-f", "lavfi", "-i", "testsrc2=size=96x64:rate=8",
+        "-f", "lavfi", "-i", "testsrc=size=95x64:rate=8",
         "-f", "lavfi", "-i", "sine=frequency=440",
         "-t", "1", "-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8",
         "-c:a", "libopus", str(source),
@@ -122,9 +122,29 @@ def test_vp9_opus_transcodes_to_h264_aac_and_preserves_source(tmp_path: Path) ->
         codecs = {(stream["codec_type"], stream["codec_name"]) for stream in media["streams"]}
         assert ("video", "h264") in codecs
         assert ("audio", "aac") in codecs
+        video_stream = next(stream for stream in media["streams"] if stream["codec_type"] == "video")
+        assert (video_stream["width"], video_stream["height"]) == (96, 64)
         assert backup.exists()
         assert not source.exists()
         conversion = db.one("SELECT warning FROM conversions WHERE job_id=?", (job["id"],))
         assert "Opus 音频已转为 AAC" in conversion["warning"]
     finally:
         manager.close()
+
+
+def test_corrupt_file_is_safely_moved_to_quarantine(tmp_path: Path) -> None:
+    root = tmp_path / "media"
+    nested = root / "电影" / "深层"
+    nested.mkdir(parents=True)
+    source = nested / "损坏.mp4"
+    source.write_bytes(b"not-a-media-file")
+    db = Database(tmp_path / "db.sqlite")
+    summary = scan_root(db, root, "scan-corrupt", Settings(scan_concurrency=1))
+    assert summary["categories"]["skipped"]["count"] == 1
+    row = db.one("SELECT * FROM files WHERE scan_id='scan-corrupt'")
+    quarantined = Path(row["path"])
+    assert quarantined == root / "损坏文件" / "电影" / "深层" / "损坏.mp4"
+    assert quarantined.exists()
+    assert not source.exists()
+    assert "已确认损坏并安全移动" in row["reason"]
+    assert enumerate_videos(root) == []

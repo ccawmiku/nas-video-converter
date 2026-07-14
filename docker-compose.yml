@@ -1,6 +1,6 @@
 services:
   nas-video-converter:
-    image: ghcr.io/ccawmiku/nas-video-converter:1.0.5
+    image: ghcr.io/ccawmiku/nas-video-converter:1.0.6
     container_name: nas-video-converter
     restart: unless-stopped
     ports:
@@ -16,6 +16,6 @@ services:
       - /volume1/movie:/media/电影:rw
       # - /volume2/other:/media/其他目录:rw
     devices:
-      - /dev/dri/renderD128:/dev/dri/renderD128
+      - /dev/dri:/dev/dri
     security_opt:
       - no-new-privileges:true

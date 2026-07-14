@@ -81,8 +81,11 @@ VIDEO_EXTENSIONS = {
     ".mpeg", ".mpg", ".mts", ".ogm", ".rm", ".rmvb", ".ts", ".vob", ".webm", ".wmv",
 }
 
+CORRUPT_DIR_NAME = "损坏文件"
+
 EXCLUDED_DIR_NAMES = {
     "@eadir", "#recycle", ".snapshot", "@snapshot", "转换前原文件", "转换失败输出",
+    CORRUPT_DIR_NAME,
 }
 
 PROFILE_CRF = {"quality": 16, "recommended": 18, "space": 20}
