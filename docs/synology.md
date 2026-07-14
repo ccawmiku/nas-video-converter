@@ -28,7 +28,7 @@
 
 ## Intel N95 Quick Sync（可选）
 
-Intel N95 带 Intel UHD Graphics，可使用 FFmpeg `h264_qsv` 进行 H.264 硬件编码。硬件加速依赖核显已启用、群晖提供渲染设备，并且容器能够访问设备。先检查：
+Intel N95 带 Intel UHD Graphics，可使用 FFmpeg `h264_qsv` 或 `h264_vaapi` 进行 H.264 硬件编码。硬件加速依赖核显已启用、群晖提供渲染设备，并且容器能够访问设备。先检查：
 
 ```bash
 ls -l /dev/dri/renderD128
@@ -48,9 +48,11 @@ devices:
   - /dev/dri:/dev/dri
 ```
 
-入口脚本会读取渲染设备的实际组 ID，并把容器用户加入对应组。网页“转码硬件加速”默认是“自动”：它会指定 `/dev/dri/renderD128` 执行一帧真实 `h264_qsv` 编码测试，通过才使用 QSV，否则回退到 `libx264` 并显示初始化错误；也可以强制软件或强制 QSV。强制 QSV 不可用时任务会明确失败，原文件不会移动。
+入口脚本会读取渲染设备的实际组 ID，并把容器用户加入对应组。网页“转码硬件加速”默认是“自动”：它会指定 `/dev/dri/renderD128` 依次执行一帧真实 `h264_qsv` 与 `h264_vaapi` 编码测试，按 QSV → VAAPI → `libx264` 选择；也可以强制软件、QSV 或 VAAPI。强制的硬件后端不可用时任务会明确失败，原文件不会移动。
 
-网页顶部会直接显示“当前转码：Intel QSV”或“当前转码：libx264 软件”，实时任务中也会显示该文件实际使用的后端。如果仍提示设备无权限，可在 NAS 上查看设备的数值权限：
+N95 属于 Alder Lake-N。如果 QSV 检查显示设备可读写，但在 `MFX session` 初始化阶段返回 `-3`，说明失败发生在 QSV/MFX 运行时兼容层，不是 Compose 映射或 UID/GID 权限。此时自动模式会改用同一块 Intel 核显的 VAAPI 编码路径；只要页面显示“当前转码：Intel VAAPI”，实际仍是核显硬件编码。
+
+网页顶部会直接显示“当前转码：Intel QSV”“当前转码：Intel VAAPI”或“当前转码：libx264 软件”，实时任务中也会显示该文件实际使用的后端。如果仍提示设备无权限，可在 NAS 上查看设备的数值权限：
 
 ```bash
 stat -c '%A %a %U %G %u:%g' /dev/dri/renderD128
@@ -58,7 +60,7 @@ stat -c '%A %a %U %G %u:%g' /dev/dri/renderD128
 
 映射设备只会把设备节点放进容器，不会改变宿主机的 UID、GID 和权限位；容器入口必须保留对应设备组作为附加组。
 
-软件编码的 16/18/20 是 CRF；QSV 的 16/18/20 是 `global_quality`（ICQ），数值越小质量越高，但两种编码器的数值不能视为完全相同的画质。
+软件编码的 16/18/20 是 CRF；QSV 的 16/18/20 是 `global_quality`（ICQ）；VAAPI 的 16/18/20 是 QP。数值越小质量越高，但三种编码器的数值不能视为完全相同的画质。
 
 ## 初次验证
 

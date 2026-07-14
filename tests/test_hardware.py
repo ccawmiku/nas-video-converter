@@ -6,7 +6,13 @@ import subprocess
 import pytest
 
 from app.config import Settings
-from app.ffmpeg_tools import MediaToolError, conversion_args, intel_qsv_status, transcode_backend
+from app.ffmpeg_tools import (
+    MediaToolError,
+    conversion_args,
+    intel_qsv_status,
+    intel_vaapi_status,
+    transcode_backend,
+)
 
 
 def qsv_status(available: bool) -> dict:
@@ -28,11 +34,20 @@ def test_auto_uses_qsv_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
     assert transcode_backend(Settings(hardware_acceleration="auto")) == "intel_qsv"
 
 
-def test_auto_falls_back_but_forced_qsv_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_auto_falls_back_to_vaapi_but_forced_qsv_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.ffmpeg_tools.intel_qsv_status", lambda: qsv_status(False))
-    assert transcode_backend(Settings(hardware_acceleration="auto")) == "software"
+    monkeypatch.setattr("app.ffmpeg_tools.intel_vaapi_status", lambda: qsv_status(True))
+    assert transcode_backend(Settings(hardware_acceleration="auto")) == "intel_vaapi"
     with pytest.raises(MediaToolError, match="强制启用"):
         transcode_backend(Settings(hardware_acceleration="intel_qsv"))
+
+
+def test_auto_falls_back_to_software_and_forced_vaapi_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.ffmpeg_tools.intel_qsv_status", lambda: qsv_status(False))
+    monkeypatch.setattr("app.ffmpeg_tools.intel_vaapi_status", lambda: qsv_status(False))
+    assert transcode_backend(Settings(hardware_acceleration="auto")) == "software"
+    with pytest.raises(MediaToolError, match="VAAPI 已被强制启用"):
+        transcode_backend(Settings(hardware_acceleration="intel_vaapi"))
 
 
 def test_conversion_arguments_select_requested_encoder() -> None:
@@ -54,6 +69,15 @@ def test_conversion_arguments_select_requested_encoder() -> None:
     assert hardware.index("-qsv_device") < hardware.index("-i")
     assert "-crf" not in hardware
     assert software[software.index("-map", software.index("-map") + 1) + 1] == "-0:d?"
+
+    vaapi = conversion_args(source, output, "transcode", settings, "recommended", "intel_vaapi")
+    assert "h264_vaapi" in vaapi
+    assert vaapi[vaapi.index("-qp") + 1] == "18"
+    assert vaapi[vaapi.index("-vf") + 1] == "pad=ceil(iw/2)*2:ceil(ih/2)*2,format=nv12,hwupload"
+    assert vaapi[vaapi.index("-vaapi_device") + 1] == "/dev/dri/renderD128"
+    assert vaapi.index("-vaapi_device") < vaapi.index("-i")
+    assert "libx264" not in vaapi
+    assert "h264_qsv" not in vaapi
 
 
 def test_remux_excludes_only_preclassified_data_tracks() -> None:
@@ -106,3 +130,24 @@ def test_qsv_status_runs_an_actual_encode_probe(tmp_path: Path, monkeypatch: pyt
     assert base["available"]
     assert not base["runtime_tested"]
     assert len(calls) == 1
+
+
+def test_vaapi_status_runs_an_actual_encode_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    device = tmp_path / "renderD128"
+    device.write_bytes(b"device-placeholder")
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        if "-encoders" in command:
+            return subprocess.CompletedProcess(command, 0, stdout=" V..... h264_vaapi Intel VAAPI", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("app.ffmpeg_tools.subprocess.run", fake_run)
+    status = intel_vaapi_status(device)
+    assert status["available"]
+    assert status["runtime_tested"]
+    probe = calls[1]
+    assert probe[probe.index("-vaapi_device") + 1] == str(device)
+    assert probe[probe.index("-vf") + 1] == "format=nv12,hwupload"
+    assert "h264_vaapi" in probe

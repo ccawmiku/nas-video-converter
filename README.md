@@ -49,17 +49,17 @@ docker compose up -d
 | 无法处理 | DTS/TrueHD、Vorbis、PGS、附件或除 `timed_id3` 外的数据轨道需要改变，因安全规则不处理 |
 | 跳过 | HDR、杜比视界、10-bit、损坏、变化中或未稳定文件 |
 
-转码保留帧率，使用 preset medium，不设置 maxrate 和输出大小上限。宽或高为奇数时，H.264 4:2:0 无法直接编码，程序只在右侧或底部补 1 个黑色像素到偶数尺寸，不裁切原画面。软件 `libx264` 使用 `yuv420p` 和 CRF 16 / 18（默认）/ 20；可选 Intel QSV 使用 `h264_qsv`、`nv12` 和 `global_quality` 16 / 18 / 20。VP9 + Opus 会转换为 H.264 + AAC；双声道 Opus 使用 192 kbps AAC，六声道以内使用 384 kbps，更多声道使用 512 kbps，其他兼容音轨仍直接复制。输出变大仍完成并显示黄色警告，不自动再转第二次。`timed_id3` 常见于流媒体录制，排除它不会重新编码影音轨道；页面原因和转换记录会明确提示，未经验证的原文件仍保留在 `转换前原文件`。
+转码保留帧率，不设置 maxrate 和输出大小上限。宽或高为奇数时，H.264 4:2:0 无法直接编码，程序只在右侧或底部补 1 个黑色像素到偶数尺寸，不裁切原画面。软件 `libx264` 使用 `yuv420p`、preset medium 和 CRF 16 / 18（默认）/ 20；Intel QSV 使用 `h264_qsv`、`nv12` 和 `global_quality` 16 / 18 / 20；Intel VAAPI 使用 `h264_vaapi`、`nv12` 和 QP 16 / 18 / 20。VP9 + Opus 会转换为 H.264 + AAC；双声道 Opus 使用 192 kbps AAC，六声道以内使用 384 kbps，更多声道使用 512 kbps，其他兼容音轨仍直接复制。输出变大仍完成并显示黄色警告，不自动再转第二次。`timed_id3` 常见于流媒体录制，排除它不会重新编码影音轨道；页面原因和转换记录会明确提示，未经验证的原文件仍保留在 `转换前原文件`。
 
 ## 完整性与进度
 
 扫描执行 FFprobe 结构分析以及开头、中间、结尾抽样解码。异常文件可在网页发起完整严格解码。缓存键包含真实路径、大小和纳秒修改时间。任务通过 SQLite 持久化；SSE 支持浏览器断线重连。
 
-FFmpeg 操作使用 `-progress pipe:1` 的真实输出展示阶段、文件/整体百分比、数量、体积、已用时间、ETA、speed、输出时间和总时长；后端每 0.2 秒检查并通过 SSE 转发新进度。网页顶部和实时任务区域会显示当前实际使用的编码后端（Intel QSV、libx264 或流复制）。暂停/继续在 Linux 上使用进程信号；取消会终止 FFmpeg 并保存已产生的临时输出。
+FFmpeg 操作使用 `-progress pipe:1` 的真实输出展示阶段、文件/整体百分比、数量、体积、已用时间、ETA、speed、输出时间和总时长；后端每 0.2 秒检查并通过 SSE 转发新进度。网页顶部和实时任务区域会显示当前实际使用的编码后端（Intel QSV、Intel VAAPI、libx264 或流复制）。暂停/继续在 Linux 上使用进程信号；取消会终止 FFmpeg 并保存已产生的临时输出。
 
 ## 群晖部署
 
-参见 [docs/synology.md](docs/synology.md)。容器只发布 `linux/amd64`，不支持 ARM 群晖。默认进程身份为 `1026:100`，可通过 `PUID`/`PGID` 覆盖。数据库和设置位于 `/config/nas-video-converter.db`。主 Compose 为 N95 映射整个 `/dev/dri`；启动脚本会把容器用户加入渲染设备的宿主机数值 GID。网页会执行一帧真实 QSV 编码测试，而不是只检查文件权限；自动模式测试失败时回退到软件编码并显示具体原因。
+参见 [docs/synology.md](docs/synology.md)。容器只发布 `linux/amd64`，不支持 ARM 群晖。默认进程身份为 `1026:100`，可通过 `PUID`/`PGID` 覆盖。数据库和设置位于 `/config/nas-video-converter.db`。主 Compose 为 N95 映射整个 `/dev/dri`；启动脚本会把容器用户加入渲染设备的宿主机数值 GID。网页会分别执行一帧真实 QSV 与 VAAPI 编码测试，而不是只检查文件权限；自动模式按 QSV → VAAPI → libx264 选择，并明确显示实际后端与可展开的检测详情。
 
 ## 本地开发与测试
 

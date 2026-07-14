@@ -38,9 +38,9 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: nas-video-converter:smoke
-      - name: Verify Intel QSV encoder is packaged
-        run: docker run --rm --entrypoint sh nas-video-converter:smoke -c 'ffmpeg -hide_banner -encoders 2>/dev/null | grep -q h264_qsv && ffmpeg -hide_banner -h full 2>/dev/null | grep -q qsv_device'
-      - name: Verify QSV supplementary group permission
+      - name: Verify Intel hardware encoders are packaged
+        run: docker run --rm --entrypoint sh nas-video-converter:smoke -c 'ffmpeg -hide_banner -encoders 2>/dev/null | grep -q h264_qsv && ffmpeg -hide_banner -encoders 2>/dev/null | grep -q h264_vaapi && ffmpeg -hide_banner -h full 2>/dev/null | grep -q qsv_device && ffmpeg -hide_banner -h full 2>/dev/null | grep -q vaapi_device'
+      - name: Verify Intel supplementary group permission
         shell: bash
         run: |
           set -euo pipefail
@@ -52,7 +52,7 @@ jobs:
             -e PUID=1026 -e PGID=100 -e QSV_DEVICE=/tmp/renderD128 \
             -v "$QSV_FAKE:/tmp/renderD128" \
             nas-video-converter:smoke \
-            python -c 'from app.ffmpeg_tools import intel_qsv_status; status = intel_qsv_status(probe_encode=False); assert status["available"], status'
+            python -c 'from app.ffmpeg_tools import intel_qsv_status, intel_vaapi_status; qsv = intel_qsv_status(probe_encode=False); vaapi = intel_vaapi_status(probe_encode=False); assert qsv["available"], qsv; assert vaapi["available"], vaapi'
       - name: Real container smoke test
         shell: bash
         run: |

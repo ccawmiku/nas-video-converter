@@ -481,14 +481,101 @@ def intel_qsv_status(device: Path | None = None, *, probe_encode: bool = True) -
     }
 
 
+def intel_vaapi_status(device: Path | None = None, *, probe_encode: bool = True) -> dict[str, Any]:
+    device = device or Path(os.getenv("QSV_DEVICE", "/dev/dri/renderD128"))
+    try:
+        completed = subprocess.run(
+            [FFMPEG_BIN, "-hide_banner", "-encoders"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+        )
+        encoder_available = completed.returncode == 0 and "h264_vaapi" in completed.stdout
+        encoder_error = completed.stderr.strip() if completed.returncode else ""
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        encoder_available = False
+        encoder_error = str(exc)
+    device_exists = device.exists()
+    device_readable = device_exists and os.access(device, os.R_OK)
+    device_writable = device_exists and os.access(device, os.W_OK)
+    base_available = encoder_available and device_readable and device_writable
+    runtime_tested = False
+    runtime_available: bool | None = None
+    runtime_error = ""
+    if base_available and probe_encode:
+        runtime_tested = True
+        try:
+            completed = subprocess.run(
+                [
+                    FFMPEG_BIN, "-hide_banner", "-loglevel", "error",
+                    "-vaapi_device", str(device),
+                    "-f", "lavfi", "-i", "color=size=64x64:rate=1",
+                    "-vf", "format=nv12,hwupload",
+                    "-frames:v", "1", "-c:v", "h264_vaapi", "-qp", "18",
+                    "-f", "null", "-",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=15,
+            )
+            runtime_available = completed.returncode == 0
+            if not runtime_available:
+                lines = (completed.stderr or completed.stdout or "未知 VAAPI 初始化错误").strip().splitlines()
+                runtime_error = " ".join(lines[-4:])[-1000:]
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            runtime_available = False
+            runtime_error = str(exc)
+    available = base_available and (not probe_encode or runtime_available is True)
+    if not encoder_available:
+        reason = f"FFmpeg 不提供 h264_vaapi 编码器{f'：{encoder_error}' if encoder_error else ''}"
+    elif not device_exists:
+        reason = f"未映射 Intel 渲染设备 {device}"
+    elif not device_readable or not device_writable:
+        reason = f"容器用户对 {device} 没有读写权限"
+    elif runtime_tested and not runtime_available:
+        reason = f"VAAPI 实际编码测试失败：{runtime_error}"
+    elif not probe_encode:
+        reason = "Intel VAAPI 设备与编码器基础检查通过"
+    else:
+        reason = "Intel VAAPI H.264 实际编码测试通过"
+    return {
+        "available": available,
+        "backend": "intel_vaapi",
+        "device": str(device),
+        "device_exists": device_exists,
+        "device_readable": device_readable,
+        "device_writable": device_writable,
+        "encoder_available": encoder_available,
+        "runtime_tested": runtime_tested,
+        "runtime_available": runtime_available,
+        "runtime_error": runtime_error,
+        "reason": reason,
+    }
+
+
 def transcode_backend(settings: Settings) -> str:
     if settings.hardware_acceleration == "software":
         return "software"
-    status = intel_qsv_status()
-    if status["available"]:
-        return "intel_qsv"
     if settings.hardware_acceleration == "intel_qsv":
-        raise MediaToolError(f"Intel Quick Sync 已被强制启用，但当前不可用：{status['reason']}")
+        qsv = intel_qsv_status()
+        if qsv["available"]:
+            return "intel_qsv"
+        raise MediaToolError(f"Intel Quick Sync 已被强制启用，但当前不可用：{qsv['reason']}")
+    if settings.hardware_acceleration == "intel_vaapi":
+        vaapi = intel_vaapi_status()
+        if vaapi["available"]:
+            return "intel_vaapi"
+        raise MediaToolError(f"Intel VAAPI 已被强制启用，但当前不可用：{vaapi['reason']}")
+    qsv = intel_qsv_status()
+    if qsv["available"]:
+        return "intel_qsv"
+    vaapi = intel_vaapi_status()
+    if vaapi["available"]:
+        return "intel_vaapi"
     return "software"
 
 
@@ -505,8 +592,9 @@ def conversion_args(
     if action == "transcode":
         resolved_backend = resolved_backend or transcode_backend(settings)
     args = ["-n"]
-    if action == "transcode" and resolved_backend == "intel_qsv":
-        args.extend(["-qsv_device", os.getenv("QSV_DEVICE", "/dev/dri/renderD128")])
+    if action == "transcode" and resolved_backend in {"intel_qsv", "intel_vaapi"}:
+        device_option = "-qsv_device" if resolved_backend == "intel_qsv" else "-vaapi_device"
+        args.extend([device_option, os.getenv("QSV_DEVICE", "/dev/dri/renderD128")])
     args.extend([
         "-i", str(source),
         "-map", "0", "-map", "-0:d?",
@@ -522,6 +610,13 @@ def conversion_args(
                 "-c", "copy", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
                 "-c:v", "h264_qsv", "-global_quality", str(quality),
                 "-preset", "medium", "-pix_fmt", "nv12",
+            ])
+        elif backend == "intel_vaapi":
+            args.extend([
+                "-c", "copy",
+                "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2,format=nv12,hwupload",
+                "-c:v", "h264_vaapi", "-qp", str(quality),
+                "-profile:v", "high",
             ])
         elif backend == "software":
             args.extend([

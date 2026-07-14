@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from . import __version__
 from .config import BASE_MEDIA_DIR, DATABASE_PATH, Settings
 from .database import Database, utc_now
-from .ffmpeg_tools import intel_qsv_status
+from .ffmpeg_tools import intel_qsv_status, intel_vaapi_status
 from .media_scanner import allowed_root, discover_roots, reclassify_stored_files
 from .safety import SafetyError, ensure_safe_path, is_excluded
 from .task_manager import TaskError, TaskManager
@@ -160,18 +160,24 @@ def get_settings():
 def hardware_status():
     settings = load_settings()
     qsv = intel_qsv_status()
+    vaapi = intel_vaapi_status()
     if settings.hardware_acceleration == "software":
         effective_backend = "software"
+    elif settings.hardware_acceleration == "intel_qsv":
+        effective_backend = "intel_qsv" if qsv["available"] else "unavailable"
+    elif settings.hardware_acceleration == "intel_vaapi":
+        effective_backend = "intel_vaapi" if vaapi["available"] else "unavailable"
     elif qsv["available"]:
         effective_backend = "intel_qsv"
-    elif settings.hardware_acceleration == "intel_qsv":
-        effective_backend = "unavailable"
+    elif vaapi["available"]:
+        effective_backend = "intel_vaapi"
     else:
         effective_backend = "software"
     return {
         "selected_mode": settings.hardware_acceleration,
         "effective_backend": effective_backend,
         "intel_qsv": qsv,
+        "intel_vaapi": vaapi,
     }
 
 

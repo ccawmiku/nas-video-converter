@@ -425,7 +425,9 @@ class TaskManager:
                     overall = (index + file_fraction) / len(rows) * 100
                     self._progress(job["id"], {
                         "stage": "无损换封装" if action == "remux" else (
-                            "视频重新编码（Intel QSV）" if selected_backend == "intel_qsv" else "视频重新编码（libx264）"
+                            "视频重新编码（Intel QSV）" if selected_backend == "intel_qsv" else
+                            "视频重新编码（Intel VAAPI）" if selected_backend == "intel_vaapi" else
+                            "视频重新编码（libx264）"
                         ),
                         "current_file": row["relative_path"], "file_percent": data.get("percent", 0),
                         "percent": overall, "completed": index, "total": len(rows),
