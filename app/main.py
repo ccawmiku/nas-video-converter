@@ -20,6 +20,7 @@ from .database import Database, utc_now
 from .ffmpeg_tools import intel_qsv_status, intel_vaapi_status
 from .media_scanner import allowed_root, discover_roots, reclassify_stored_files
 from .safety import SafetyError, ensure_safe_path, is_excluded
+from .sse import event_cursor
 from .task_manager import TaskError, TaskManager
 
 
@@ -139,6 +140,16 @@ async def task_error(_: Request, exc: TaskError):
 @app.get("/", include_in_schema=False)
 def index():
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/records", include_in_schema=False)
+def records_page():
+    return FileResponse(STATIC_DIR / "records.html")
+
+
+@app.get("/files", include_in_schema=False)
+def files_page():
+    return FileResponse(STATIC_DIR / "files.html")
 
 
 @app.get("/health")
@@ -339,7 +350,7 @@ def cancel_job(job_id: str):
 @app.get("/api/events")
 async def events(request: Request, after: int = 0):
     header = request.headers.get("last-event-id")
-    cursor = max(after, int(header) if header and header.isdigit() else 0)
+    cursor = event_cursor(db, after, header)
     async def generate():
         nonlocal cursor
         last_keepalive = time.monotonic()

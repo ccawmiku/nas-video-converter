@@ -30,6 +30,8 @@ def test_http_scan_settings_and_recovery(tmp_path: Path) -> None:
     main = importlib.import_module("app.main")
     with TestClient(main.app) as client:
         assert client.get("/health").json()["status"] == "ok"
+        assert client.get("/files").status_code == 200
+        assert client.get("/records?view=history").status_code == 200
         roots = client.get("/api/roots").json()["roots"]
         assert roots[0]["name"] == "视频库"
         settings = client.put("/api/settings", json={"schedule_time": "03:15", "auto_remux": False}).json()

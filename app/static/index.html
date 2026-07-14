@@ -22,14 +22,6 @@
 
     <section id="stats" class="stats"></section>
 
-    <section class="panel settings-panel">
-      <div class="section-title settings-title">
-        <div><p class="eyebrow">AUTOMATION &amp; RESOURCES</p><h2>自动化与资源</h2><p class="section-description">按用途分组配置；修改后统一保存。</p></div>
-        <button id="saveSettings" class="primary">保存设置</button>
-      </div>
-      <div id="settings" class="settings-groups"></div>
-    </section>
-
     <section class="panel progress-panel">
       <div class="section-title"><div><p class="eyebrow">LIVE TASK</p><h2>实时任务</h2></div><span id="connection">SSE 连接中</span></div>
       <div id="emptyProgress" class="empty">暂无运行中的任务</div>
@@ -47,26 +39,23 @@
       </div>
     </section>
 
-    <div class="split">
-      <section class="panel"><div class="section-title"><h2>任务历史</h2><button id="historyRefresh">刷新</button></div><div id="history" class="timeline"></div></section>
-      <section class="panel"><div class="section-title"><h2>错误日志</h2><button id="logRefresh">刷新</button></div><div id="logs" class="logs"></div></section>
-    </div>
-
-    <section class="panel">
-      <div class="section-title"><div><p class="eyebrow">FILE TRANSACTIONS</p><h2>转换记录与路径对应</h2></div><button id="conversionRefresh">刷新</button></div>
-      <div class="table-wrap"><table><thead><tr><th>状态 / 动作</th><th>原文件</th><th>输出文件</th><th>保留原文件</th><th>大小对比</th><th>完成时间</th></tr></thead><tbody id="conversionRows"></tbody></table></div>
+    <section class="panel settings-panel">
+      <div class="section-title settings-title">
+        <div><p class="eyebrow">AUTOMATION &amp; RESOURCES</p><h2>自动化与资源</h2><p class="section-description">按用途分组配置；修改后统一保存。</p></div>
+        <button id="saveSettings" class="primary">保存设置</button>
+      </div>
+      <div id="settings" class="settings-groups"></div>
     </section>
 
-    <section class="panel">
-      <div class="section-title"><div><p class="eyebrow">INTERRUPTION RECOVERY</p><h2>中断临时文件</h2></div><button id="recoveryRefresh">刷新</button></div>
-      <p class="muted recovery-note">服务不会自动移动、覆盖或删除这些文件。可先执行只读抽样或严格完整检测，再由人工决定后续操作。</p>
-      <div id="recovery" class="recovery-list"></div>
-    </section>
-
-    <section class="panel">
-      <div class="section-title"><div><p class="eyebrow">SCAN PLAN</p><h2>文件与处理计划</h2></div><div class="filters"><input id="search" placeholder="搜索路径"><select id="category"><option value="">全部分类</option><option value="no_conversion">无需转换</option><option value="remux">可无损换封装</option><option value="transcode">需要重新编码</option><option value="unsupported">无法处理</option><option value="skipped">跳过</option></select></div></div>
-      <div class="batchbar"><label><input type="checkbox" id="selectAll"> 全选当前可处理项</label><span id="selectedCount">已选 0 项</span><select id="profile"><option value="quality">高质量（16）</option><option selected value="recommended">推荐（18）</option><option value="space">节省空间（20）</option></select><button id="confirmBtn" class="primary" disabled>确认计划</button><button id="runBtn" class="primary" disabled>正式运行</button></div>
-      <div class="table-wrap"><table><thead><tr><th></th><th>相对路径</th><th>分类</th><th>技术信息</th><th>完整性</th><th>大小</th><th>原因 / 操作</th></tr></thead><tbody id="fileRows"></tbody></table></div>
+    <section class="panel records-hub">
+      <div class="section-title"><div><p class="eyebrow">WORKSPACE &amp; RECORDS</p><h2>文件与记录</h2><p class="section-description">长列表已移到独立页面，首页只保留入口。</p></div></div>
+      <nav class="record-links" aria-label="记录与维护页面">
+        <a href="/files"><strong>文件与处理计划</strong><span>筛选文件、确认计划并正式运行</span></a>
+        <a href="/records?view=history"><strong>任务历史</strong><span>查看扫描、转换和检测任务</span></a>
+        <a href="/records?view=logs"><strong>系统日志</strong><span>查看 info、warning 和 error</span></a>
+        <a href="/records?view=conversions"><strong>转换记录</strong><span>核对原文件、输出和备份路径</span></a>
+        <a href="/records?view=recovery"><strong>中断临时文件</strong><span>检查中断后保留的临时输出</span></a>
+      </nav>
     </section>
   </main>
   <div id="toast"></div>

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>记录与维护 · NAS 视频转换器</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div><p class="eyebrow">NAS VIDEO CONVERTER</p><h1>记录与维护</h1></div>
+    <div class="topbar-actions"><a class="back-link" href="/">返回处理台</a><div class="trust"><span></span><b id="versionBadge">版本读取中</b></div></div>
+  </header>
+  <main class="records-page">
+    <section class="panel records-toolbar">
+      <nav class="record-tabs" aria-label="记录分类">
+        <a class="record-tab" data-view="history" href="/records?view=history">任务历史</a>
+        <a class="record-tab" data-view="logs" href="/records?view=logs">系统日志</a>
+        <a class="record-tab" data-view="conversions" href="/records?view=conversions">转换记录</a>
+        <a class="record-tab" data-view="recovery" href="/records?view=recovery">中断临时文件</a>
+      </nav>
+      <label id="recoveryRootField" hidden>映射目录<select id="recordsRoot"></select></label>
+    </section>
+
+    <section class="panel records-content">
+      <div class="section-title"><div><p id="recordsEyebrow" class="eyebrow">TASK HISTORY</p><h2 id="recordsTitle">任务历史</h2></div><button id="recordsRefresh">刷新</button></div>
+      <div id="recordsHistory" class="timeline"></div>
+      <div id="recordsLogs" class="logs" hidden></div>
+      <div id="recordsConversions" class="table-wrap" hidden><table><thead><tr><th>状态 / 动作</th><th>原文件</th><th>输出文件</th><th>保留原文件</th><th>大小对比</th><th>完成时间</th></tr></thead><tbody id="recordsConversionRows"></tbody></table></div>
+      <div id="recordsRecovery" hidden>
+        <p class="recovery-note">服务不会自动移动、覆盖或删除这些文件。可先执行只读抽样或严格完整检测，再由人工决定后续操作。</p>
+        <div id="recordsRecoveryList" class="recovery-list"></div>
+      </div>
+    </section>
+  </main>
+  <div id="toast"></div>
+  <script src="/static/records.js" defer></script>
+</body>
+</html>
